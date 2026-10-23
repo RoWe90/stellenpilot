@@ -38,6 +38,9 @@ services:
         condition: service_healthy
     ports:
       - "8443:8443"
+    labels:
+      net.unraid.docker.webui: "https://${STELLENPILOT_HOST:?Set LAN host}:8443/"
+      net.unraid.docker.shell: "sh"
     environment:
       STELLENPILOT_HOST: "${STELLENPILOT_HOST:?Set your LAN IP or local DNS hostname in .env}"
       CADDY_PASSWORD_HASH: "${CADDY_PASSWORD_HASH:?Generate and set a password hash in .env}"

@@ -1,7 +1,6 @@
 """The optional daily sidecar should not run twice after restart."""
 import unittest
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timezone, timedelta
 
 from stellenpilot.unraid_scheduler import due, parse_time
 
@@ -14,7 +13,7 @@ class UnraidSchedulerTests(unittest.TestCase):
                 parse_time(invalid)
 
     def test_daily_once_and_after_restart(self):
-        zone = ZoneInfo("Europe/Berlin")
+        zone = timezone(timedelta(hours=2))
         day = datetime(2026, 10, 23, 9, 1, tzinfo=zone)
         self.assertTrue(due(day, (8, 45), ""))
         self.assertFalse(due(day, (8, 45), "2026-10-23"))

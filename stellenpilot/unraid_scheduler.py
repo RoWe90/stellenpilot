@@ -6,7 +6,6 @@ dashboard searches are separate: do not initiate those during the daily job.
 """
 from __future__ import annotations
 
-import fcntl
 import os
 import re
 import subprocess
@@ -27,6 +26,7 @@ def due(now: datetime, scheduled: tuple[int, int], last_day: str) -> bool:
 
 
 def main() -> None:
+    import fcntl  # Linux container only; keep module importable on Windows for tests.
     home = Path("/data")
     scheduled = parse_time(os.environ.get("STELLENPILOT_DAILY_TIME", "08:45"))
     timezone = ZoneInfo(os.environ.get("TZ", "Europe/Berlin"))
