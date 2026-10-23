@@ -4,9 +4,9 @@ FROM python:3.12-slim
 # PDF export needs LibreOffice (about 400 MB). Build with --build-arg WITH_PDF=false to skip it.
 ARG WITH_PDF=true
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends tzdata && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata && \
     if [ "$WITH_PDF" = "true" ]; then \
-      apt-get install -y --no-install-recommends libreoffice-writer-nogui fonts-crosextra-carlito fonts-dejavu-core; \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libreoffice-writer-nogui fonts-crosextra-carlito fonts-dejavu-core; \
     fi && \
     rm -rf /var/lib/apt/lists/*
 

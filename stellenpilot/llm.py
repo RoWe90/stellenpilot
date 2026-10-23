@@ -44,7 +44,7 @@ class LLM:
         c = settings["llm"]
         self.provider = (c.get("provider") or "none").lower()
         if self.provider not in CLOUD | set(LOCAL_PRESETS) | {"none"}:
-            raise RuntimeError(f"Unknown llm.provider '{self.provider}'. Use one of: none, anthropic, openai, {', '.join(LOCAL_PRESETS)}")
+            raise RuntimeError(f"Unknown llm.provider '{self.provider}'. Use one of: none, anthropic, openai, opencode, {', '.join(LOCAL_PRESETS)}")
         self.model = c.get("model") or {"anthropic": "claude-haiku-4-5-20251001", "builtin": "standard", "opencode": "deepseek-v4.1-flash"}.get(self.provider, "")
         self.local = self.provider in LOCAL_PRESETS
         # JOBHUNT_LLM_BASE_URL overrides the config, handy in Docker (host.docker.internal).

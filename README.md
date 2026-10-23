@@ -1,7 +1,5 @@
 # Stellenpilot
 
-> **Unraid fork:** Secure HTTPS Docker Compose stack, optional daily scheduling and OpenCode Go integration. [Install on Unraid](unraid/README.md). The original desktop behavior remains unchanged.
-
 **Every morning it finds new jobs, scores them against your CV and writes a tailored CV and cover letter for the best ones. Free, local, no account.**
 
 [![PyPI](https://img.shields.io/pypi/v/stellenpilot)](https://pypi.org/project/stellenpilot/)

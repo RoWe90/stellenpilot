@@ -2041,7 +2041,7 @@ async function loadSettings(){
   }catch(e){$("setMsg").textContent=e.message}
 }
 
-$("setForm").provider.addEventListener("change",()=>{const f=$("setForm");if(f.provider.value==="opencode"){f.model.value="deepseek-v4.1-flash";f.base_url.value=""}showProvider()});
+$("setForm").provider.addEventListener("change",showProvider);
 async function saveSettings(){
   const f=$("setForm"),body={keys:{}};
   for(const [sec,keys] of Object.entries(SETF)){body[sec]={};for(const k of keys){const el=f.elements[k];body[sec][k]=el.type==="checkbox"?el.checked:el.tagName==="TEXTAREA"?lines(el.value):el.value.trim()}}
