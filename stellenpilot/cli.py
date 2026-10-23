@@ -15,6 +15,8 @@ ENV_TEMPLATE = """# Secrets for stellenpilot. This file is ignored by git. Never
 # LLM (pick one, matching llm.provider in config.toml)
 ANTHROPIC_API_KEY=
 OPENAI_API_KEY=
+# OpenCode Go/Zen API key (the Go chat-completions models are supported)
+OPENCODE_API_KEY=
 # Optional job sources
 ADZUNA_APP_ID=
 ADZUNA_APP_KEY=

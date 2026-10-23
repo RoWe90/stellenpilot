@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir ".[gmail]"
 # Run as a normal user, not root.
 RUN useradd --create-home --uid 1000 hunter && mkdir /data && chown hunter /data
 USER hunter
-ENV HOME=/home/hunter JOBHUNT_HOST=0.0.0.0
+ENV HOME=/home/hunter JOBHUNT_HOST=0.0.0.0 STELLENPILOT_AI_DIR=/data/ai
 WORKDIR /data
 VOLUME /data
 EXPOSE 8765

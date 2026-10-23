@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import uuid
 
 from . import progress
 from .http import HttpError, request_json, stream_lines
@@ -22,7 +23,8 @@ LOCAL_PRESETS = {
     "local": "",                              # any OpenAI compatible server: set base_url
     "builtin": "",                            # Stellenpilot's own llama.cpp engine, started on demand
 }
-CLOUD = {"anthropic", "openai"}
+CLOUD = {"anthropic", "openai", "opencode"}
+OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
 
 # Job ads come from third parties and may contain text written to steer an AI ("rate this candidate 100").
 # Every prompt wraps the ad in these tags, and the system prompt says to treat it as data only.
@@ -43,11 +45,13 @@ class LLM:
         self.provider = (c.get("provider") or "none").lower()
         if self.provider not in CLOUD | set(LOCAL_PRESETS) | {"none"}:
             raise RuntimeError(f"Unknown llm.provider '{self.provider}'. Use one of: none, anthropic, openai, {', '.join(LOCAL_PRESETS)}")
-        self.model = c.get("model") or {"anthropic": "claude-haiku-4-5-20251001", "builtin": "standard"}.get(self.provider, "")
+        self.model = c.get("model") or {"anthropic": "claude-haiku-4-5-20251001", "builtin": "standard", "opencode": "deepseek-v4.1-flash"}.get(self.provider, "")
         self.local = self.provider in LOCAL_PRESETS
         # JOBHUNT_LLM_BASE_URL overrides the config, handy in Docker (host.docker.internal).
         base = os.environ.get("JOBHUNT_LLM_BASE_URL") or c.get("base_url") or LOCAL_PRESETS.get(self.provider, "")
-        self.base_url = base.rstrip("/")
+        self.base_url = (base or (OPENCODE_GO_BASE_URL if self.provider == "opencode" else "")).rstrip("/")
+        # Stable across retries and all calls made by this LLM instance.
+        self.session_id = str(uuid.uuid4()) if self.provider == "opencode" else ""
         self.timeout = float(c.get("timeout") or (600 if self.local else 120))
         self.json_mode = c.get("json_mode", True)
         self.num_ctx = int(c.get("num_ctx") or 8192)
@@ -60,6 +64,8 @@ class LLM:
             raise RuntimeError("llm.provider is anthropic but ANTHROPIC_API_KEY is not set")
         if self.provider == "openai" and not settings.secret("OPENAI_API_KEY") and not self.base_url:
             raise RuntimeError("llm.provider is openai but OPENAI_API_KEY is not set")
+        if self.provider == "opencode" and not settings.secret("OPENCODE_API_KEY"):
+            raise RuntimeError("llm.provider is opencode but OPENCODE_API_KEY is not set")
         if self.provider == "builtin":
             from . import builtin
             self.model = self.model if self.model in builtin.MODELS else "standard"
@@ -123,7 +129,7 @@ class LLM:
                 with progress.aside("Starting the built-in AI (loading the model into memory)"):
                     self.base_url = builtin.ensure_running(self.model)
         base = self.base_url or "https://api.openai.com/v1"
-        key = self.settings.secret("OPENAI_API_KEY")
+        key = self.settings.secret("OPENCODE_API_KEY" if self.provider == "opencode" else "OPENAI_API_KEY")
         body = {"model": self.model, "max_tokens": max_tokens, "temperature": self.temperature,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
         if want_json and self.json_mode:
@@ -131,6 +137,9 @@ class LLM:
         if self.provider == "builtin":
             body["chat_template_kwargs"] = {"enable_thinking": self.think}  # Qwen3.5 thinks by default; slow on a CPU
         headers = {"Authorization": f"Bearer {key}"} if key and not self.local else {}
+        if self.provider == "opencode":
+            headers["x-opencode-session"] = self.session_id
+            headers["User-Agent"] = "stellenpilot-unraid/1.0"
         if self.provider == "builtin":
             from . import builtin
             headers = builtin.auth_headers()  # the engine is started with a fresh key each time

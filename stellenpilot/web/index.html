@@ -809,12 +809,13 @@ body.wizopen{overflow:hidden}
                   <option value="lmstudio">LM Studio (free, on this computer)</option>
                   <option value="anthropic">Claude (API key)</option>
                   <option value="openai">OpenAI (API key)</option>
+                  <option value="opencode">OpenCode Go (API key)</option>
                   <option value="llamacpp">llama.cpp server</option>
                   <option value="vllm">vLLM server</option>
                   <option value="local">Other local server</option>
                 </select></label>
               <label>Model <input class="input" name="model" list="modelList" placeholder="e.g. qwen3.5:4b"></label>
-              <datalist id="modelList"><option value="qwen3.5:4b"><option value="ministral-3:8b"><option value="ministral-3:3b"><option value="qwen3.5:9b"><option value="gemma4:12b"><option value="claude-haiku-4-5-20251001"><option value="claude-sonnet-5-5"></datalist>
+              <datalist id="modelList"><option value="qwen3.5:4b"><option value="ministral-3:8b"><option value="ministral-3:3b"><option value="qwen3.5:9b"><option value="gemma4:12b"><option value="claude-haiku-4-5-20251001"><option value="claude-sonnet-5-5"><option value="deepseek-v4.1-flash"><option value="glm-5.3-flash"></datalist>
             </div>
             <div class="howto bi" data-for="builtin" id="biSettings"></div>
             <div class="howto" data-for="ollama"><b>Set up Ollama</b><ol>
@@ -834,9 +835,11 @@ body.wizopen{overflow:hidden}
               <li>Add a little credit under <b>Billing</b>. A daily search usually costs a few cents.</li>
               <li>Open <b>API keys</b>, create a key, paste it below with a model name, and press <b>Save and test</b>.</li></ol></div>
             <label data-for="anthropic">Anthropic API key <span class="keyset" data-key="ANTHROPIC_API_KEY"></span><input class="input" name="ANTHROPIC_API_KEY" type="password" autocomplete="off" placeholder="sk-ant-..."></label>
+            <div class="howto" data-for="opencode"><b>OpenCode Go</b><ol><li>Copy your API key from <a href="https://opencode.ai" target="_blank" rel="noopener">OpenCode</a>.</li><li>Use a chat-completions model such as <code>deepseek-v4.1-flash</code> (not a Responses or Anthropic Messages-only model).</li><li>The Go API is intended for coding agents, so access for job-search tasks may be restricted.</li></ol></div>
+            <label data-for="opencode">OpenCode API key <span class="keyset" data-key="OPENCODE_API_KEY"></span><input class="input" name="OPENCODE_API_KEY" type="password" autocomplete="off" placeholder="OpenCode API key"></label>
             <label data-for="openai">OpenAI API key <span class="keyset" data-key="OPENAI_API_KEY"></span><input class="input" name="OPENAI_API_KEY" type="password" autocomplete="off" placeholder="sk-..."></label>
             <label data-for="local llamacpp vllm lmstudio ollama">Server address <span class="muted">Leave empty for the usual one.</span><input class="input" name="base_url" placeholder="http://localhost:11434"></label>
-            <div class="btnrow" data-for="ollama lmstudio anthropic openai llamacpp vllm local"><button type="button" class="btn sec" id="aiTest">Save and test</button><span id="aiTestMsg" role="status"></span></div>
+            <div class="btnrow" data-for="ollama lmstudio anthropic openai opencode llamacpp vllm local"><button type="button" class="btn sec" id="aiTest">Save and test</button><span id="aiTestMsg" role="status"></span></div>
             <div id="rereadBox" hidden><div class="btnrow" style="margin-top:12px;align-items:center"><span id="rereadMsg" role="status">Your profile has no jobs or projects yet. The AI can read your CV again and fill them in.</span><button type="button" class="btn sec" id="rereadBtn">Read my CV again</button></div></div>
           </section>
 
@@ -2021,7 +2024,7 @@ $("setForm").addEventListener("change",e=>{if(e.target.closest(".srcrow"))showKe
 $("setForm").addEventListener("click",async e=>{const b=e.target.closest("[data-clear-key]");if(!b)return;e.preventDefault();
   if(!confirm(t("Remove this saved key from this computer?")))return;
   try{await api("POST","/api/settings",{clear_keys:[b.dataset.clearKey]});await loadSettings()}catch(err){$("setMsg").textContent=err.message}});
-function showProvider(){const f=$("setForm"),pv=f.provider.value;f.querySelectorAll("[data-for]").forEach(el=>el.hidden=!el.dataset.for.split(" ").includes(pv));f.model.closest("label").hidden=pv==="none"||pv==="builtin";
+function showProvider(){const f=$("setForm"),pv=f.provider.value; if(pv==="opencode"&&!f.model.value.trim())f.model.value="deepseek-v4.1-flash";f.querySelectorAll("[data-for]").forEach(el=>el.hidden=!el.dataset.for.split(" ").includes(pv));f.model.closest("label").hidden=pv==="none"||pv==="builtin";
   if(pv==="builtin"){if(!["standard","light"].includes(f.model.value))f.model.value="standard";biLoad()}}
 async function loadSettings(){
   const f=$("setForm");
