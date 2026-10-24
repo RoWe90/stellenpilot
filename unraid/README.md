@@ -26,7 +26,19 @@ chown -R 1000:1000 /mnt/user/appdata/stellenpilot
 docker run -it --rm caddy:2.10-alpine caddy hash-password
 ```
 
-The last command prompts for a password and prints its hash. Edit `unraid/.env`:
+The last command prompts for a password and prints its hash. **Do not paste
+the following commands while the password prompt or initialization is still
+running**: the interactive process may consume them as input.
+
+Edit the Compose environment file from inside `stellenpilot-source/unraid`:
+
+```bash
+TERM=xterm nano .env
+```
+
+Some Unraid terminals (including Ghostty) set `TERM=xterm-ghostty`, which
+Unraid's version of `nano` may not recognize. Prefixing the command with
+`TERM=xterm` fixes this. If it still fails, try `TERM=xterm vi .env`.
 
 - `STELLENPILOT_HOST`: your Unraid LAN IP or DNS name, **without** scheme or port.
 - `CADDY_PASSWORD_HASH`: the entire generated password hash in **single quotes**.
@@ -37,16 +49,46 @@ The last command prompts for a password and prints its hash. Edit `unraid/.env`:
 The gateway login username is **stellenpilot**. The password is the one you just hashed.
 The hash is not your OpenCode key.
 
-Then run:
+**Save the file before continuing.** Replace the example IP and
+`CADDY_PASSWORD_HASH='REPLACE_ME'` with your actual LAN host and the entire
+password hash, retaining the **single quotes** around the hash. Never share
+your password or API keys in a log.
+
+Validate the environment and build the image:
 
 ```bash
-cd /mnt/user/appdata/stellenpilot-source/unraid
-docker compose config --quiet
-docker compose build
-docker compose run --rm stellenpilot init
-docker compose up -d
-docker compose ps
+cd /mnt/user/appdata/stellenpilot-source/unraid || exit 1
+
+if grep -q REPLACE_ME .env; then
+  echo "ERROR: replace CADDY_PASSWORD_HASH in .env first"
+else
+  docker compose config --quiet && docker compose build
+fi
 ```
+
+**Run initialization and wait for the shell prompt to return.** The
+`</dev/null` prevents accidentally pasted commands from being consumed by
+the temporary `docker compose run` container:
+
+```bash
+docker compose run --rm -T stellenpilot init </dev/null
+```
+
+Only **after** that command has finished, start the long-running services
+(the image has already been built):
+
+```bash
+docker compose up -d --no-build
+docker compose ps
+docker compose logs --tail=60 stellenpilot gateway
+```
+
+You should see both `Stellenpilot` (healthy) and
+`Stellenpilot-Gateway` (running). The `init` command alone does not start
+the gateway. If you see `No such container: Stellenpilot-Gateway`, first
+run `docker compose ps -a` and check `docker compose logs gateway`. Do
+not try to export the TLS certificate until the gateway exists and has
+started successfully.
 
 The commands build directly from this fork's checked-out source; they do not
 require a previously published image. The fork's GitHub Actions workflow may
