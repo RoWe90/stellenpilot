@@ -1,0 +1,62 @@
+# Unraid Compose Manager stack. The app is NOT directly published to the host.
+# Copy .env.example to .env and configure it before starting.
+x-stellenpilot: &stellenpilot
+  image: ghcr.io/rowe90/stellenpilot:latest
+  build:
+    context: ..
+    dockerfile: Dockerfile
+  user: "${PUID:-1000}:${PGID:-1000}"
+  restart: unless-stopped
+  environment: &app-env
+    TZ: Europe/Berlin
+    HOME: /data
+    STELLENPILOT_AI_DIR: /data/ai
+    JOBHUNT_HOST: 0.0.0.0
+  volumes:
+    - "${STELLENPILOT_DATA_DIR:-/mnt/user/appdata/stellenpilot}:/data"
+
+services:
+  stellenpilot:
+    <<: *stellenpilot
+    container_name: Stellenpilot
+    command: ["serve", "--no-browser"]
+    expose:
+      - "8765"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=5).close()"]
+      interval: 30s
+      timeout: 8s
+      start_period: 45s
+      retries: 3
+
+  gateway:
+    image: caddy:2.10-alpine
+    container_name: Stellenpilot-Gateway
+    restart: unless-stopped
+    depends_on:
+      stellenpilot:
+        condition: service_healthy
+    ports:
+      - "8443:8443"
+    labels:
+      net.unraid.docker.webui: "https://${STELLENPILOT_HOST:?Set LAN host}:8443/"
+      net.unraid.docker.shell: "sh"
+    environment:
+      STELLENPILOT_HOST: "${STELLENPILOT_HOST:?Set your LAN IP or local DNS hostname in .env}"
+      CADDY_PASSWORD_HASH: "${CADDY_PASSWORD_HASH:?Generate and set a password hash in .env}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - "${STELLENPILOT_DATA_DIR:-/mnt/user/appdata/stellenpilot}/caddy/data:/data"
+      - "${STELLENPILOT_DATA_DIR:-/mnt/user/appdata/stellenpilot}/caddy/config:/config"
+
+  scheduler:
+    <<: *stellenpilot
+    container_name: Stellenpilot-Scheduler
+    profiles: ["scheduler"]
+    entrypoint: ["python", "-m", "stellenpilot.unraid_scheduler"]
+    environment:
+      <<: *app-env
+      STELLENPILOT_DAILY_TIME: "${STELLENPILOT_DAILY_TIME:-08:45}"
+    depends_on:
+      stellenpilot:
+        condition: service_healthy

@@ -36,12 +36,12 @@ EDITABLE = {"search": ("keywords", "city", "radius_km", "country", "include_remo
             "schedule": ("enabled", "time"),
             "watch": ("starter_list",),
             "ui": ("language", "check_updates")}
-CHOICES = {("llm", "provider"): {"none", "builtin", "ollama", "lmstudio", "llamacpp", "vllm", "local", "anthropic", "openai"},
+CHOICES = {("llm", "provider"): {"none", "builtin", "ollama", "lmstudio", "llamacpp", "vllm", "local", "anthropic", "openai", "opencode"},
            ("language", "my_german_level"): {"", "A1", "A2", "B1", "B2", "C1", "C2"},
            ("tailor", "letter_language"): {"auto", "en", "de"},
            ("tailor", "cv_style"): {"classic", "compact", "lebenslauf"},
            ("ui", "language"): {"auto", "en", "de"}}
-SECRETS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ADZUNA_APP_ID", "ADZUNA_APP_KEY", "THEIRSTACK_API_KEY")
+SECRETS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENCODE_API_KEY", "ADZUNA_APP_ID", "ADZUNA_APP_KEY", "THEIRSTACK_API_KEY")
 
 
 _TRUE, _FALSE = {"true", "1", "yes", "on"}, {"false", "0", "no", "off", ""}
@@ -360,6 +360,9 @@ def make_handler(settings, port: int = 8765):
             return data
 
         def do_GET(self):
+            # Sidecar/Docker health probe: no user data or configuration is exposed.
+            if self.path == "/healthz":
+                return self._send(200, {"ok": True})
             if not self._host_ok():
                 return
             if self.path.startswith("/api/progress"):  # polled while slow AI work runs, so no lock

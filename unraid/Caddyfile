@@ -1,0 +1,16 @@
+# Private HTTPS LAN gateway. Do not expose TCP/8443 to the public internet.
+# Basic auth is safe here only because Caddy terminates HTTPS.
+{$STELLENPILOT_HOST}:8443 {
+  tls internal
+
+  basic_auth {
+    stellenpilot {$CADDY_PASSWORD_HASH}
+  }
+
+  # The upstream intentionally accepts localhost only. It is reachable
+  # exclusively on the Compose network; Caddy handles HTTPS and authentication.
+  reverse_proxy stellenpilot:8765 {
+    header_up Host localhost:8765
+    header_up Origin http://localhost:8765
+  }
+}
