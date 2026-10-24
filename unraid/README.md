@@ -106,6 +106,36 @@ new code.
 
 ## Browser access and TLS
 
+**Connecting by IP address:** Some clients omit TLS SNI when the URL contains
+an IP address. Without Caddy's `default_sni` setting, this produces
+`tlsv1 alert internal error` even though Caddy has already issued a valid
+local certificate. This stack includes `default_sni {$STELLENPILOT_HOST}`
+in `unraid/Caddyfile`.
+
+For installations cloned before this fix:
+
+```bash
+cd /mnt/user/appdata/stellenpilot-source || exit 1
+# If you changed tracked files locally, back them up before pulling.
+git status --short
+git pull --ff-only
+cd unraid
+docker exec Stellenpilot-Gateway caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+docker compose restart gateway
+curl -k -i --max-time 10 "https://${STELLENPILOT_HOST:-192.168.178.69}:18443/" || true
+```
+
+If you edited `unraid/compose.yaml` directly to use host port 18443,
+`git pull` may refuse to overwrite that local change. Preserve your
+configuration and apply the `default_sni` block from the current
+`unraid/Caddyfile` manually instead. This fix does not require an
+image rebuild or deleting any appdata files.
+
+For a real connectivity check, use the **configured LAN IP** rather than
+`127.0.0.1` (which may also fail HTTP Host matching). A `401 Unauthorized`
+response indicates that HTTPS is functioning and gateway authentication
+is required.
+
 Open `https://<YOUR-UNRAID-LAN-IP>:18443/` (or use the port configured in `STELLENPILOT_HTTPS_PORT`).
 **Caddy uses an internal certificate authority.** A new browser will not trust
 it by default. Before entering your password, export the root CA:

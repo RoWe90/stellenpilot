@@ -1,3 +1,9 @@
+# Caddy needs a default TLS name when clients connect by IP without SNI.
+# Must match the name/IP for which Caddy issued its local certificate.
+{
+  default_sni {$STELLENPILOT_HOST}
+}
+
 # Private HTTPS LAN gateway. Do not expose TCP/8443 to the public internet.
 # Basic auth is safe here only because Caddy terminates HTTPS.
 {$STELLENPILOT_HOST}:8443 {
