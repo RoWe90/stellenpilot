@@ -1,5 +1,13 @@
 # Stellenpilot
 
+## Unraid / Docker server installation
+
+This fork includes an **Unraid-ready Docker Compose stack** with a password-protected HTTPS gateway, persistent appdata, an optional daily search scheduler, and support for **OpenCode Go**.
+
+**[Unraid installation guide →](unraid/README.md)** · [Docker Compose configuration](unraid/compose.yaml) · [OpenCode configuration](unraid/README.md#opencode-go-api)
+
+> The Unraid stack is separate from the upstream desktop installation. Configure a password and trust the local HTTPS CA before using it. Do not expose the dashboard port directly.
+
 **Every morning it finds new jobs, scores them against your CV and writes a tailored CV and cover letter for the best ones. Free, local, no account.**
 
 [![PyPI](https://img.shields.io/pypi/v/stellenpilot)](https://pypi.org/project/stellenpilot/)
