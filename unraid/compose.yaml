@@ -37,9 +37,9 @@ services:
       stellenpilot:
         condition: service_healthy
     ports:
-      - "8443:8443"
+      - "${STELLENPILOT_HTTPS_PORT:-8443}:8443"
     labels:
-      net.unraid.docker.webui: "https://${STELLENPILOT_HOST:?Set LAN host}:8443/"
+      net.unraid.docker.webui: "https://${STELLENPILOT_HOST:?Set LAN host}:${STELLENPILOT_HTTPS_PORT:-8443}/"
       net.unraid.docker.shell: "sh"
     environment:
       STELLENPILOT_HOST: "${STELLENPILOT_HOST:?Set your LAN IP or local DNS hostname in .env}"

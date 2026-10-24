@@ -8,7 +8,7 @@ Source fork: https://github.com/RoWe90/stellenpilot
 
 - Unraid 7.x with Docker Compose (`docker compose version`), or Compose Manager Plus.
 - A fixed LAN IP or local DNS name for your Unraid server.
-- TCP **8443** free on Unraid. **Do not port-forward** this port.
+- A free TCP port for the gateway (default `8443`; `18443` is a common alternative). **Do not port-forward** it.
 - Enough disk space for PDFs and, optionally, built-in AI weights (several GB).
 - A strong HTTPS gateway password; the generated CA certificate must be trusted in browsers.
 
@@ -41,6 +41,7 @@ Unraid's version of `nano` may not recognize. Prefixing the command with
 `TERM=xterm` fixes this. If it still fails, try `TERM=xterm vi .env`.
 
 - `STELLENPILOT_HOST`: your Unraid LAN IP or DNS name, **without** scheme or port.
+- `STELLENPILOT_HTTPS_PORT`: external HTTPS port. The supplied `.env.example` uses `18443` to avoid collisions with existing Unraid services; change it to another free port if needed. The container still listens on `8443` internally.
 - `CADDY_PASSWORD_HASH`: the entire generated password hash in **single quotes**.
 - `STELLENPILOT_DATA_DIR`: persistent appdata folder; defaults to `/mnt/user/appdata/stellenpilot`.
 - `PUID` and `PGID`: the UID/GID that owns the appdata folder (default 1000:1000).
@@ -83,6 +84,13 @@ docker compose ps
 docker compose logs --tail=60 stellenpilot gateway
 ```
 
+If startup fails with `failed to bind host port 0.0.0.0:8443/tcp: address already in use`,
+another service is using the external port. Do **not** stop that service.
+Set `STELLENPILOT_HTTPS_PORT=18443` (or another free port) in
+`unraid/.env`, then rerun `docker compose up -d --no-build`.
+The internal `Caddyfile` port stays `8443`; the Unraid WebUI link follows
+the chosen external port automatically.
+
 You should see both `Stellenpilot` (healthy) and
 `Stellenpilot-Gateway` (running). The `init` command alone does not start
 the gateway. If you see `No such container: Stellenpilot-Gateway`, first
@@ -98,7 +106,7 @@ new code.
 
 ## Browser access and TLS
 
-Open `https://<YOUR-UNRAID-LAN-IP>:8443/` (or your configured DNS hostname).
+Open `https://<YOUR-UNRAID-LAN-IP>:18443/` (or use the port configured in `STELLENPILOT_HTTPS_PORT`).
 **Caddy uses an internal certificate authority.** A new browser will not trust
 it by default. Before entering your password, export the root CA:
 
