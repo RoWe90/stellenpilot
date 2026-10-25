@@ -166,6 +166,36 @@ Compose network** because Stellenpilot currently rejects remote hosts. The
 original server port `8765` has **no host port mapping**. Do not expose it via
 Unraid or another Docker network. A health probe returns only `{"ok":true}`.
 
+## Opening and downloading application documents
+
+**Unraid is a headless container**: it cannot launch a file manager or office
+application on your PC via the desktop `xdg-open` command. For this stack the
+following actions work through the HTTPS browser gateway instead:
+
+- **Open CV**: download the generated PDF (preferred) or DOCX file.
+- **Open cover letter**: download the generated PDF (preferred) or DOCX file.
+- **Open folder**: download a ZIP of the PDFs and DOCX files in that job's
+  output folder. The ZIP does not include unrelated files or symlinks.
+
+The documents already created are retained in
+`/mnt/user/appdata/stellenpilot/output/` and do not need to be regenerated.
+
+To install this fix after it has been merged into `main`:
+
+```bash
+cd /mnt/user/appdata/stellenpilot-source || exit 1
+git status --short
+git pull --ff-only
+cd unraid
+docker compose up -d --no-deps --build stellenpilot
+docker compose ps
+```
+
+`git pull --ff-only` requires a clean checkout. If you edited
+`unraid/compose.yaml` or `unraid/Caddyfile` manually, keep a backup
+and reconcile those changes rather than overwriting them. Your application
+data are stored separately in `/mnt/user/appdata/stellenpilot/`.
+
 ## Automatic searches
 
 Run the scheduler as an **optional sidecar**:

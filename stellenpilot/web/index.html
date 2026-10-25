@@ -1750,8 +1750,16 @@ main.addEventListener("click",async e=>{
   if(b.dataset.go){goJob(b.dataset.go,b.dataset.open);return}
   if(b.dataset.applied){await save(b.dataset.applied,{status:"applied",statusSource:"manual",statusUpdatedAt:new Date().toISOString(),statusNote:"Marked applied on Home"},"Moved to Applications");return}
   if(b.dataset.skip){await save(b.dataset.skip,{status:"skipped",statusSource:"manual",statusUpdatedAt:new Date().toISOString(),statusNote:"Posting closed"},"Moved to skipped");return}
-  if(b.dataset.openFolder){try{await api("POST","/api/open-folder/"+encodeURIComponent(b.dataset.openFolder));toast("Folder opened")}catch(e){toast(e.message)}return}
-  if(b.dataset.doc){try{await api("POST","/api/open-doc/"+encodeURIComponent(b.dataset.id)+"/"+b.dataset.doc);toast("Opening the "+(b.dataset.doc==="cv"?"CV":"cover letter"))}catch(e){toast(e.message)}return}
+  if(b.dataset.openFolder){try{
+    const r=await api("POST","/api/open-folder/"+encodeURIComponent(b.dataset.openFolder));
+    if(r.downloadUrl){window.location.assign(r.downloadUrl);toast("Downloading documents as ZIP")}
+    else toast("Folder opened")
+  }catch(e){toast(e.message)}return}
+  if(b.dataset.doc){try{
+    const r=await api("POST","/api/open-doc/"+encodeURIComponent(b.dataset.id)+"/"+b.dataset.doc);
+    if(r.downloadUrl){window.location.assign(r.downloadUrl);toast("Downloading "+(b.dataset.doc==="cv"?"CV":"cover letter"))}
+    else toast("Opening the "+(b.dataset.doc==="cv"?"CV":"cover letter"))
+  }catch(e){toast(e.message)}return}
   if(b.dataset.make){const t=b.textContent,id=b.dataset.make;b.disabled=true;b.textContent="Writing your CV and cover letter…";
     try{await withProgress("docs:"+id,()=>api("POST","/api/docs/"+encodeURIComponent(id)),
         p=>{b.textContent=`${p.steps?t("Step {a} of {b}: ",{a:p.step,b:p.steps}):""}${ts(p.stage)}${p.percent!=null?` (${p.percent}%)`:""}… ${mmss(p.elapsed||0)}`});toast("Documents ready");lastState="";await refresh()}catch(e){toast(e.message);b.disabled=false;b.textContent=t}return}
