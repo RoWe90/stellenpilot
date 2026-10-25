@@ -188,6 +188,9 @@ def make_plan(job: dict, profile: dict, llm=None) -> dict:
         except Exception as e:  # fall back to the keyword plan, never block the run
             plan["note"] = f"LLM plan failed, used keyword plan: {e}"
     plan = _valid_plan(plan, profile)
+    # Only generated summary text is polished; stored profile fields remain verbatim.
+    from .document_quality import polish_generated_german
+    plan["summary"] = polish_generated_german(plan["summary"])
     bad = unsupported_claims(plan["summary"], profile, job)
     if bad:
         plan["summary"] = _default_summary(profile)
@@ -199,6 +202,10 @@ def make_plan(job: dict, profile: dict, llm=None) -> dict:
 
 class ProfileQualityError(ValueError):
     """An imported CV mixed job headings and job descriptions; manual correction is required."""
+
+
+class DocumentQualityError(ValueError):
+    """The generated document files did not pass local quality checks."""
 
 
 def profile_quality_issues(profile: dict) -> list[str]:
@@ -391,7 +398,8 @@ LETTER_SYSTEM = """Write the BODY of a concise, evidence-led job application let
 Use 3 short paragraphs, 140 to 220 words. No greeting, subject line or signature.
 Paragraph 1: a concrete reason this specific role fits the candidate, tied to work already done.
 Paragraph 2: one or two RELEVANT work examples from the profile, describing actions, tools and
-results actually documented. Paragraph 3: connect these examples to the job's priorities and
+results actually documented. Use the provided SELECTED EVIDENCE if it fits the advertisement,
+rather than listing a technology inventory. Paragraph 3: connect these examples to the job's priorities and
 close with a confident invitation to discuss.
 Use ONLY verified profile facts; do not invent years, achievements, languages or expertise.
 Skills marked Currently learning are NOT experience. Do not volunteer missing skills or
@@ -405,8 +413,11 @@ Return JSON only: {"body": "..."}"""
 LETTER_SYSTEM_DE = """Verfasse ausschließlich den HAUPTTEIL eines überzeugenden deutschen Bewerbungsanschreibens.
 Drei kurze Absätze, etwa 140 bis 220 Wörter; keine Anrede, Betreffzeile oder Grußformel.
 Absatz 1: konkreter Bezug zur ausgeschriebenen Tätigkeit und zu belegbarer Erfahrung.
-Absatz 2: ein bis zwei passende, überprüfbare Beispiele aus der Berufspraxis bzw. Projekten.
-Absatz 3: deren Nutzen für die konkrete Stelle und ein sachlicher, selbstbewusster Abschluss.
+Absatz 2: ein bis zwei passende, überprüfbare Beispiele aus der Berufspraxis bzw. Projekten,
+bevorzugt aus AUSGEWÄHLTE BELEGE. Keine bloße Aufzählung von Technologie-Namen.
+Absatz 3: Nutzen dieser konkreten Erfahrungen für die fachlichen Anforderungen aus der Anzeige
+und ein sachlicher, selbstbewusster Abschluss. Keine erfundenen Kennzahlen, Ergebnisse,
+Akzeptanzkriterien, Kundenbeziehungen oder nachträglich behauptete Erfolge.
 Verwende nur nachweisbare Profilfakten. Keine erfundenen Erfolge, Zeitangaben, Tools oder Kenntnisse.
 'Learning' ist keine Berufserfahrung. Liste keine vermeintlichen Defizite auf und behaupte
 nicht, dass eine Technologie unbekannt sei, nur weil sie nicht im Profil erwähnt wird.
@@ -473,17 +484,42 @@ def letter_body(job: dict, profile: dict, plan: dict, llm=None, lang: str = "en"
     if not (llm and llm.enabled):
         return template, "Template letter (no LLM configured)."
     name = (profile.get("person") or {}).get("name", "")
-    user = f"CANDIDATE PROFILE\n{profile_text(profile)}\n\nJOB\n{job['title']} at {job['company']}\n{job_ad(job['description'], llm.max_chars)}\n\nCandidate name: {name}"
+    evidence = []
+    for entry, indexes in zip(profile.get("experience") or [], plan.get("experience") or []):
+        bullets = entry.get("bullets") or []
+        for i in indexes[:2]:
+            if type(i) is int and 0 <= i < len(bullets):
+                evidence.append(f"{entry.get('title', '')}: {bullets[i]}")
+        if len(evidence) >= 7:
+            break
+    user = (f"CANDIDATE PROFILE\n{profile_text(profile)}\n\nSELECTED EVIDENCE "
+            f"(only quote when relevant to the job)\n" + "\n".join(evidence) +
+            f"\n\nJOB\n{job['title']} at {job['company']}\n{job_ad(job['description'], llm.max_chars)}"
+            f"\n\nCandidate name: {name}")
+    from .document_quality import polish_generated_german, letter_quality_issues
     bad: list[str] = []
-    for _ in range(2):
+    best_valid = ""
+    for attempt in range(2):
         try:
-            body = str(llm.complete_json(LETTER_SYSTEM_DE if lang == "de" else LETTER_SYSTEM, user, max_tokens=900).get("body") or "")
+            body = str(llm.complete_json(LETTER_SYSTEM_DE if lang == "de" else LETTER_SYSTEM,
+                                         user, max_tokens=900).get("body") or "")
         except Exception as e:
-            return template, f"LLM letter failed ({e}), template used."
+            return (best_valid, f"LLM revision failed ({type(e).__name__}); original safe draft used."
+                    ) if best_valid else (template, f"LLM letter failed ({e}), template used.")
+        if lang == "de":
+            body = polish_generated_german(body)
         bad = unsupported_claims(body, profile, job)
+        style_issues = letter_quality_issues(body, lang=lang)
         if body and not bad:
-            return body, ""
-        user += f"\n\nYour previous draft mentioned {bad}, which are not backed by the profile. Remove them. Only if the ad asks for one, you may say plainly that the candidate has not used it yet."
+            best_valid = body
+            if not style_issues:
+                return body, ""
+        if attempt == 0:
+            user += ("\n\nRevise the draft. Use only facts from the candidate profile. "
+                     f"Unsupported claims: {bad}. Format/style problems: {style_issues}. "
+                     "Use three concise paragraphs, concrete selected evidence and no generic filler.")
+    if best_valid:
+        return best_valid, "Safe AI letter retained, but some stylistic checks still need a human review."
     return template, f"LLM drafts mentioned things not in your experience ({bad}), so a template letter was used."
 
 
@@ -535,7 +571,8 @@ def slug(s: str, n: int = 40) -> str:
 
 
 def tailor_job(job: dict, profile: dict, out_root: Path, llm=None, make_pdf: bool = True,
-               letter_setting: str = "auto", my_german: str = "A2", cv_style: str = "classic") -> dict:
+               letter_setting: str = "auto", my_german: str = "A2", cv_style: str = "classic",
+               cv_focus: str = "balanced", cv_education: str = "compact") -> dict:
     issues = profile_quality_issues(profile)
     if issues:
         raise ProfileQualityError("Bitte profile.toml prüfen: " + "; ".join(issues[:6]))
@@ -547,6 +584,11 @@ def tailor_job(job: dict, profile: dict, out_root: Path, llm=None, make_pdf: boo
     steps = 4 if make_pdf else 3
     progress.stage("Choosing the experience, projects and skills that fit this job", expect=700, step=1, steps=steps)
     plan = make_plan(job, profile, llm)
+    original_plan = plan
+    selection_notes = []
+    if cv_style == "lebenslauf":
+        from .cv_policy import curate
+        plan, selection_notes = curate(profile, original_plan, cv_focus, cv_education)
     who = slug(person.get("name", "CV"))
     cv = folder / f"{who}_CV_{slug(job['company'], 30)}.docx"
     build_cv(profile, plan, cv, cv_style)
@@ -561,6 +603,31 @@ def tailor_job(job: dict, profile: dict, out_root: Path, llm=None, make_pdf: boo
                       "letter suggests a higher level than you have; consider letter_language = \"en\" or say your level in the letter.")
     letter = folder / f"{who}_{'Anschreiben' if lang == 'de' else 'Cover_Letter'}_{slug(job['company'], 30)}.docx"
     build_letter(job, profile, body, letter, lang)
+    if make_pdf:
+        progress.stage("Making the PDF files", step=4, steps=steps)
+    pdfs = to_pdf([cv, letter]) if make_pdf else []
+    from .document_quality import inspect_documents
+    def expected():
+        return [entry["bullets"][idx]
+                for entry, selected in zip(profile.get("experience") or [], plan.get("experience") or [])
+                for idx in selected]
+    audit = inspect_documents(cv, letter, pdfs, expected(), require_pdf=make_pdf)
+
+    # If actual A4 PDF pagination exceeds two pages, retry once with fewer
+    # lower-ranked verbatim bullets. Never scale the type below legibility.
+    if (cv_style == "lebenslauf" and cv_focus == "balanced" and make_pdf
+            and audit["stats"].get("cv_pages", 0) > 2):
+        from .cv_policy import curate
+        plan, selection_notes = curate(profile, original_plan, "concise", cv_education)
+        build_cv(profile, plan, cv, cv_style)
+        cv_pdf = cv.with_suffix(".pdf")
+        cv_pdf.unlink(missing_ok=True)
+        new_pdfs = to_pdf([cv])
+        pdfs = [p for p in pdfs if p != cv_pdf] + new_pdfs
+        audit = inspect_documents(cv, letter, pdfs, expected(), require_pdf=make_pdf)
+        selection_notes.insert(0, "CV automatisch auf knappe Auswahl umgestellt, da "
+                                    "der PDF-Export sonst mehr als zwei Seiten benötigte.")
+
     report = folder / "report.md"
     report.write_text("\n".join([
         f"# {job['title']} at {job['company']}",
@@ -569,11 +636,18 @@ def tailor_job(job: dict, profile: dict, out_root: Path, llm=None, make_pdf: boo
         "## Covered by your experience", *[f"* {c}" for c in plan["covered"]], "",
         "## You are learning these", *[f"* {c}" for c in plan["learning"]], "",
         "## Missing (say so honestly if asked)", *[f"* {m}" for m in plan["missing"]], "",
+        "## CV-Auswahl", *([f"* {n}" for n in selection_notes] or ["* Alle relevanten Einträge beibehalten."]), "",
+        "## Dokumentenprüfung",
+        f"* Status: {'PASS' if audit['ok'] else 'FEHLER'}",
+        f"* CV-Seiten: {audit['stats'].get('cv_pages', 'nicht geprüft')}; "
+        f"Anschreiben-Seiten: {audit['stats'].get('letter_pages', 'nicht geprüft')}",
+        *([f"* {i['severity'].upper()} [{i['code']}]: {i['detail']}" for i in audit["issues"]]
+          or ["* Keine automatisiert erkennbaren Probleme."]), "",
         "## Notes", "* Read both documents before sending. The truth guard checks tools and numbers, not every claim.",
         *[f"* {n}" for n in (level_note, plan.get("note"), plan.get("guard"), note) if n],
     ]) + "\n", encoding="utf-8")
-    if make_pdf:
-        progress.stage("Making the PDF files", step=4, steps=steps)
-    pdfs = to_pdf([cv, letter]) if make_pdf else []
+    if not audit["ok"]:
+        raise DocumentQualityError("Automatische Dokumentenprüfung fehlgeschlagen. "
+                                   f"Details: {report}")
     return {"folder": str(folder), "files": [str(p) for p in (cv, letter, report, *pdfs)],
-            "coverage": plan["coverage"], "cv_style": cv_style if cv_style in CV_STYLES else "classic"}
+            "coverage": plan["coverage"], "quality": audit, "cv_style": cv_style if cv_style in CV_STYLES else "classic"}

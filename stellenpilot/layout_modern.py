@@ -80,6 +80,13 @@ def _doc(*, kind: str) -> Document:
     normal.paragraph_format.space_after = Pt(3)
     doc.core_properties.title = "Bewerbungsunterlagen"
     doc.core_properties.subject = "Lebenslauf" if kind == "cv" else "Anschreiben"
+    if kind == "cv":
+        footer = section.footer.paragraphs[0]
+        footer.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        _font(footer.add_run("Lebenslauf  ·  "), size=8, color=MUTED)
+        field = OxmlElement("w:fldSimple")
+        field.set(qn("w:instr"), "PAGE")
+        footer._p.append(field)
     return doc
 
 
@@ -182,18 +189,19 @@ def build_cv(profile: dict, plan: dict, path: Path):
     skills = profile.get("skills") or {}
     if skills:
         _section(doc, HEADINGS["skills"])
-        table = _table(doc, [47, 123])
+        # Single reading-order paragraph per skill group. Tables broke PDF
+        # extraction order and awkwardly centred wrapping category labels.
         for group in plan.get("skill_groups", list(skills)):
             if group not in skills:
                 continue
-            row = table.add_row()
-            _no_split(row)
-            left, right = row.cells
-            _text_cell(left, group, size=9.1, bold=True, color=NAVY)
-            _text_cell(right, ", ".join(skills[group]), size=9.3)
-            left.width, right.width = Mm(47), Mm(123)
-            left.paragraphs[0].paragraph_format.space_after = Pt(2)
-            right.paragraphs[0].paragraph_format.space_after = Pt(2)
+            items = skills[group]
+            if not items:
+                continue
+            p = doc.add_paragraph()
+            p.paragraph_format.space_after = Pt(3)
+            p.paragraph_format.keep_together = True
+            _font(p.add_run(str(group) + "  ·  "), bold=True, size=9.25, color=NAVY)
+            _font(p.add_run(", ".join(str(x) for x in items)), size=9.25, color=INK)
 
     experience = profile.get("experience") or []
     if experience:
@@ -213,18 +221,23 @@ def build_cv(profile: dict, plan: dict, path: Path):
                         list(range(len(project.get("bullets") or []))))
 
     education = profile.get("education") or []
-    if education:
+    indices = plan.get("education_indices")
+    indices = (list(range(len(education))) if indices is None else
+               [i for i in indices if type(i) is int and 0 <= i < len(education)])
+    if indices:
         _section(doc, HEADINGS["education"])
-        for entry in education:
-            table = _table(doc, [122, 48])
-            row = table.add_row()
-            _no_split(row)
-            _text_cell(row.cells[0], entry.get("degree", ""), size=9.3, bold=True, color=NAVY)
-            _text_cell(row.cells[1], entry.get("dates", ""), size=8.9, color=MUTED,
-                       align=WD_ALIGN_PARAGRAPH.RIGHT)
+        compact = plan.get("education_mode", "compact") != "full"
+        for i in indices:
+            entry = education[i]
             p = doc.add_paragraph()
-            p.paragraph_format.space_after = Pt(5)
-            _font(p.add_run(entry.get("school", "")), size=9.2, color=MUTED)
+            p.paragraph_format.keep_together = True
+            p.paragraph_format.space_after = Pt(3 if compact else 6)
+            _font(p.add_run(str(entry.get("degree", ""))), size=9.15 if compact else 9.4,
+                  bold=True, color=NAVY)
+            if entry.get("school"):
+                _font(p.add_run("  ·  " + str(entry["school"])), size=9.0, color=MUTED)
+            if entry.get("dates"):
+                _font(p.add_run("  ·  " + str(entry["dates"])), size=8.9, color=MUTED)
 
     if person.get("languages"):
         _section(doc, HEADINGS["languages"])

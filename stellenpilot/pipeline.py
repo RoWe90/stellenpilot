@@ -193,7 +193,8 @@ def _run(settings, db: DB, tailor: bool) -> dict:
             db.stage("tailor", f"Tailoring CV {i} of {len(todo)}: {job['company']}")
             try:
                 res = tailor_job(job, profile, out_root, llm, t.get("make_pdf", True), t.get("letter_language", "auto"), my_de,
-                                 t.get("cv_style", "classic"))
+                                 t.get("cv_style", "classic"), t.get("cv_focus", "balanced"),
+                                 t.get("cv_education", "compact"))
             except Exception as e:
                 problems.append(f"tailoring {job['id']}: {e}")
                 continue

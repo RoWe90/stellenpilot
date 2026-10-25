@@ -59,6 +59,8 @@ def run(home: Path, job_id: str, no_llm: bool = False) -> int:
         letter_setting=tailor.get("letter_language", "auto"),
         my_german=my_german_level(settings),
         cv_style=tailor.get("cv_style", "classic"),
+        cv_focus=tailor.get("cv_focus", "balanced"),
+        cv_education=tailor.get("cv_education", "compact"),
     )
     folder = Path(result["folder"])
     report = (folder / "report.md").read_text(encoding="utf-8")
@@ -98,6 +100,10 @@ def run(home: Path, job_id: str, no_llm: bool = False) -> int:
         if "_CV_" in pdf_path.name and len(pdf.pages) > 2:
             print("WARN: CV exceeds two pages; review content and pagination")
 
+    # Generator also writes detailed selection and QA findings into report.md.
+    if "## Dokumentenprüfung" not in report or "## CV-Auswahl" not in report:
+        print("FAIL: missing document quality or selection report", file=sys.stderr)
+        return 1
     print("PASS: complete application generation, local files and A4 check")
     print("Documents:", folder)
     print("No production document or application-status changes made")

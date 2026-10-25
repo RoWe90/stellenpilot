@@ -112,8 +112,15 @@ only_english_ads = true
 # "auto" writes German for German ads only if your German is B2 or better (and an LLM is set).
 # Below B2 it writes English: a polished German letter would suggest a level you do not have.
 letter_language = "auto"
-# CV layout: "classic", "compact" or "lebenslauf" (German, dates first). Layout only, the content is the same.
+# "lebenslauf": modern one-column A4 and accessible text-only skill groups.
 cv_style = "classic"
+# With lebenslauf only: "full" copies all selected bullets; "balanced" limits to 6/3/2;
+# "concise" to 4/2/1 by job recency, always at least one per role.
+# Omitted facts are preserved in profile.toml and listed in report.md.
+cv_focus = "balanced"
+# "compact": all education entries in one-line form.
+# "full": more space per entry. "essential": skip unfinished studies (report lists omissions).
+cv_education = "compact"
 
 [notify]
 # A short digest to yourself after each run. Secrets go in .env, see docs/digest.md.

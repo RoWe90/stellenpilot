@@ -851,7 +851,11 @@ body.wizopen{overflow:hidden}
               <label>Cover letter language
                 <select class="input" name="letter_language"><option value="auto">Automatic</option><option value="en">Always English</option><option value="de">Always German</option></select></label>
               <label>CV layout
-                <select class="input" name="cv_style"><option value="classic">Classic, one column</option><option value="compact">Compact, fits more on a page</option><option value="lebenslauf">German Lebenslauf, dates first</option></select></label>
+                <select class="input" name="cv_style"><option value="classic">Classic, one column</option><option value="compact">Compact, fits more on a page</option><option value="lebenslauf">Modern German Lebenslauf, ATS-friendly</option></select></label>
+              <label>CV detail
+                <select class="input" name="cv_focus"><option value="balanced">Balanced (recommended)</option><option value="full">Full work history</option><option value="concise">Concise</option></select></label>
+              <label>Education detail
+                <select class="input" name="cv_education"><option value="compact">Compact, keep all</option><option value="full">Expanded, keep all</option><option value="essential">Only completed qualifications</option></select></label>
             </div>
             <p class="hint">Match goes from 0 to 100. Automatic writes German letters only if your German is B2 or better.</p>
           </section>
@@ -2026,7 +2030,7 @@ $("cvSave").addEventListener("click",async()=>{
 let cvPrompted=false;
 
 /* ---------- Settings ---------- */
-const SETF={search:["keywords","city","radius_km","country","include_remote","max_age_days","exclude_title_words"],sources:["arbeitsagentur","arbeitnow","adzuna","theirstack","jobicy","remotive","workingstudentjobs"],llm:["provider","model","base_url"],language:["my_german_level"],tailor:["min_match","letter_language","cv_style"],schedule:["enabled","time"],watch:["starter_list"],ui:["language","check_updates"]};
+const SETF={search:["keywords","city","radius_km","country","include_remote","max_age_days","exclude_title_words"],sources:["arbeitsagentur","arbeitnow","adzuna","theirstack","jobicy","remotive","workingstudentjobs"],llm:["provider","model","base_url"],language:["my_german_level"],tailor:["min_match","letter_language","cv_style","cv_focus","cv_education"],schedule:["enabled","time"],watch:["starter_list"],ui:["language","check_updates"]};
 function showKeys(){$("setForm").querySelectorAll(".srcrow").forEach(r=>{const on=r.querySelector('input[type=checkbox]').checked;r.querySelectorAll(".g2,.keyhelp,label:not(.check)").forEach(el=>el.hidden=!on)})}
 $("setForm").addEventListener("change",e=>{if(e.target.closest(".srcrow"))showKeys()});
 $("setForm").addEventListener("click",async e=>{const b=e.target.closest("[data-clear-key]");if(!b)return;e.preventDefault();
