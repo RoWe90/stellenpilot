@@ -47,6 +47,36 @@ class ProfileQualityTests(unittest.TestCase):
                 tailor_job(JOB, bad, Path(directory), make_pdf=False)
             self.assertEqual(list(Path(directory).iterdir()), [])
 
+    def test_detects_cv_import_fragments_from_realistic_pdf_layout(self):
+        role = {
+            "title": "Werkstudent",
+            "company": "Example GmbH, City, Entwicklung einer Web-Applikation für eine "
+                       "Lernplattform (Vue, Azure, Pipelines, CI/CD)",
+            "bullets": ["Entwicklung einer Web-Applikation (Vue, Azure",
+                        "Pipelines, CI/CD)"],
+        }
+        issues = profile_quality_issues({"experience": [role]})
+        self.assertTrue(any("Arbeitgeber" in item for item in issues), issues)
+        self.assertTrue(any("Klammerausdrücke" in item for item in issues), issues)
+
+    def test_detects_split_non_degree_studies_without_guessing(self):
+        profile = {"experience": [], "education": [
+            {"degree": "Fotograf (kein Abschluss", "school": "Umorientierung auf Studium)"},
+            {"degree": "Studium Angewandte Informatik", "school": "Hochschule",
+             "dates": "03/2021"},
+        ]}
+        issues = profile_quality_issues(profile)
+        self.assertEqual(len(issues), 1)
+        self.assertIn("Ausbildung 1", issues[0])
+
+    def test_fragments_with_embedded_pdf_bullet_marks_are_blocked(self):
+        bad = {**PROFILE, "experience": [{
+            "title": "Bachelorant", "company": "Example GmbH",
+            "bullets": ["Abschlussarbeit •", "und Implementierung der Software"],
+        }]}
+        issues = profile_quality_issues(bad)
+        self.assertTrue(any("PDF-Aufzählungszeichen" in issue for issue in issues), issues)
+
     def test_imported_duplicate_bullets_flagged_without_dropping_facts(self):
         role = dict(PROFILE["experience"][0])
         role["bullets"] = ["Python Tool entwickelt.", "  Python   Tool entwickelt. "]
