@@ -215,10 +215,35 @@ def profile_quality_issues(profile: dict) -> list[str]:
                 issues.append(f"Berufsstation {idx}: {label} enthält Aufzählungen oder Zeilenumbrüche")
             elif len(value) > 135:
                 issues.append(f"Berufsstation {idx}: {label} ist ungewöhnlich lang ({len(value)} Zeichen)")
+        # PDF text extraction can shift the entire job description into the employer field
+        # without leaving bullet glyphs. Catch the common long "Company, city, Development ..."
+        # pattern, but keep ordinary short employer/location combinations valid.
+        company = str(role.get("company") or "")
+        if (len(company) > 70 and company.count(",") >= 2
+                and re.search(r"(?i),\\s*(?:Entwicklung|Implementierung|Automatisierung|"
+                              r"Werkzeugentwicklung|Daten(?:vorverarbeitung|transformation))\\b", company)):
+            issues.append(f"Berufsstation {idx}: Arbeitgeber enthält offenbar Tätigkeitsbeschreibungen")
         bullets = [str(b).strip() for b in (role.get("bullets") or []) if str(b).strip()]
-        normalized = [re.sub(r"\s+", " ", b).casefold() for b in bullets]
+        normalized = [re.sub(r"\\s+", " ", b).casefold() for b in bullets]
         if len(normalized) != len(set(normalized)):
             issues.append(f"Berufsstation {idx}: doppelte Tätigkeitsbeschreibungen")
+        for bullet in bullets:
+            if any(glyph in bullet for glyph in ("•", "●", "▪", "")):
+                issues.append(f"Berufsstation {idx}: Stichpunkt enthält PDF-Aufzählungszeichen")
+                break
+            if bullet.count("(") != bullet.count(")"):
+                issues.append(f"Berufsstation {idx}: Stichpunkt enthält zerrissene Klammerausdrücke")
+                break
+            if re.match(r"(?i)^(?:mit dem Thema|und (?:Implementierung|Hindernisvermeidung)|"
+                        r"zum ferngesteuerten|des Backends|Pipelines, CI/CD)\\b", bullet):
+                issues.append(f"Berufsstation {idx}: Stichpunkt ist vermutlich ein Satzfragment")
+                break
+    for idx, education in enumerate(profile.get("education") or [], 1):
+        degree = str(education.get("degree") or "")
+        school = str(education.get("school") or "")
+        if (degree.count("(") != degree.count(")") or school.count("(") != school.count(")")
+                or school.lower().lstrip().startswith("umorientierung")):
+            issues.append(f"Ausbildung {idx}: Abschluss und Schule wurden beim Import offenbar falsch getrennt")
     return issues
 
 
