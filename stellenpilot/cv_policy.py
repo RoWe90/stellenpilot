@@ -62,3 +62,65 @@ def curate(profile: dict, plan: dict, focus: str = "balanced",
         notes.append(f"CV-Auswahl: {len(education) - len(selected)} nicht abgeschlossene "
                      "Ausbildungsstationen ausgelassen; weiterhin im Profil verfügbar.")
     return result, notes
+
+
+def expand_ranked_bullets(profile: dict, selected_plan: dict,
+                          complete_plan: dict, extra: int) -> dict:
+    """Return a new plan with up to extra omitted, already verified bullets added.
+
+    Prefer the more recent position; within a position keep the original
+    relevance order. Never add an index the source plan excluded.
+    """
+    if extra < 0:
+        raise ValueError("extra must be nonnegative")
+    result = deepcopy(selected_plan)
+    result["experience"] = [list(idx) for idx in (selected_plan.get("experience") or [])]
+    remaining = extra
+    for n, entry in enumerate(profile.get("experience") or []):
+        if n >= len(result["experience"]):
+            break
+        existing = result["experience"][n]
+        source = complete_plan.get("experience") or []
+        valid = source[n] if n < len(source) else []
+        bullets = entry.get("bullets") or []
+        for idx in valid:
+            if remaining == 0:
+                break
+            if type(idx) is int and 0 <= idx < len(bullets) and idx not in existing:
+                existing.append(idx)
+                remaining -= 1
+        if remaining == 0:
+            break
+    return result
+
+
+def omitted_bullet_count(profile: dict, plan: dict, complete_plan: dict) -> int:
+    """Count omitted permitted facts without including LLM-excluded items."""
+    count = 0
+    for n, entry in enumerate(profile.get("experience") or []):
+        complete = complete_plan.get("experience") or []
+        partial = plan.get("experience") or []
+        original = complete[n] if n < len(complete) else []
+        current = set(partial[n]) if n < len(partial) else set()
+        count += sum(type(idx) is int and 0 <= idx < len(entry.get("bullets") or [])
+                     and idx not in current for idx in original)
+    return count
+
+
+def selection_notes(profile: dict, plan: dict, label: str = "balanced") -> list[str]:
+    """Explain source omissions after page balancing without touching the profile."""
+    notes = []
+    for n, entry in enumerate(profile.get("experience") or []):
+        original = entry.get("bullets") or []
+        partial = plan.get("experience") or []
+        idx = partial[n] if n < len(partial) else []
+        if len(idx) < len(original):
+            title = entry.get("title") or f"Station {n + 1}"
+            notes.append(f"CV-Auswahl ({label}): {len(original) - len(idx)} Stichpunkte bei '{title}' "
+                         "nicht im Bewerbungs-CV, aber vollständig im Profil erhalten.")
+    education = profile.get("education") or []
+    selected = plan.get("education_indices")
+    if selected is not None and len(selected) < len(education):
+        notes.append(f"CV-Auswahl: {len(education) - len(selected)} nicht abgeschlossene "
+                     "Ausbildungsstationen ausgelassen; weiterhin im Profil verfügbar.")
+    return notes

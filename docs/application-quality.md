@@ -141,3 +141,30 @@ One retry is allowed for unsupported statements or generic / badly structured
 letters; a factually safe draft wins over a worse generic fallback.
 Common German compound spelling errors are corrected **only in generated
 summaries and letter prose**, never in profile bullet points.
+
+
+## Two-page balance and action-evidence checks (v3)
+
+When a balanced CV already renders to one or two A4 pages, Stellenpilot
+tries to reintroduce omitted, *profile-backed* bullets, prioritizing recent
+positions and the original relevance order. A separate temporary LibreOffice
+render checks the candidate; the live CV is replaced **only** if that candidate
+stays within two pages and passes the document integrity checks. The search
+uses a bounded number of renders; the saved profile never changes. A report
+entry records how many previously omitted activities were restored. If the
+fuller CV requires three pages, Stellenpilot retains the largest fitting
+tested prefix of relevant experience instead. Page density is a preference,
+not a guarantee that every two-page CV must fill both pages.
+
+The letter review also checks two unsupported *action* inferences that were
+observed in a real application: past experience defining acceptance criteria,
+and responsibility for deployments based solely on the presence of Docker
+or CI/CD in a skills list. Source statements must support the claimed action
+(and for deployment, mention the tool/action relationship). When evidence is
+missing, the draft is rejected and the LLM is asked to revise it. The
+fallback remains subject to the existing truth checks. This is a targeted
+guard, **not** a universal semantic fact verifier: review each letter manually.
+
+Regression coverage: \`tests/test_application_quality_v3.py\` simulates page
+counts without requiring a live LLM, checks the maximum-fitting selection,
+and verifies the known unsupported-claim patterns.

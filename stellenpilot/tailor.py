@@ -496,7 +496,9 @@ def letter_body(job: dict, profile: dict, plan: dict, llm=None, lang: str = "en"
             f"(only quote when relevant to the job)\n" + "\n".join(evidence) +
             f"\n\nJOB\n{job['title']} at {job['company']}\n{job_ad(job['description'], llm.max_chars)}"
             f"\n\nCandidate name: {name}")
-    from .document_quality import polish_generated_german, letter_quality_issues
+    from .document_quality import (
+        polish_generated_german, letter_quality_issues, unsupported_action_claims,
+    )
     bad: list[str] = []
     best_valid = ""
     for attempt in range(2):
@@ -509,6 +511,11 @@ def letter_body(job: dict, profile: dict, plan: dict, llm=None, lang: str = "en"
         if lang == "de":
             body = polish_generated_german(body)
         bad = unsupported_claims(body, profile, job)
+        # A known tool is not proof of a particular action: CI/CD and Docker
+        # alone do not establish deployment, and data validation alone does
+        # not establish writing acceptance criteria.
+        bad += unsupported_action_claims(body, profile_text(profile, include_learning=False))
+        bad = list(dict.fromkeys(bad))
         style_issues = letter_quality_issues(body, lang=lang)
         if body and not bad:
             best_valid = body
@@ -627,6 +634,78 @@ def tailor_job(job: dict, profile: dict, out_root: Path, llm=None, make_pdf: boo
         audit = inspect_documents(cv, letter, pdfs, expected(), require_pdf=make_pdf)
         selection_notes.insert(0, "CV automatisch auf knappe Auswahl umgestellt, da "
                                     "der PDF-Export sonst mehr als zwei Seiten benötigte.")
+
+    # A CV that already fits in two pages should not unnecessarily omit
+    # relevant, verified experience. Try adding the remaining source bullets
+    # back, up to the A4 two-page limit. Candidate renders live in a temporary
+    # directory and only a verified better result replaces the current CV.
+    # The letter is untouched; the source profile and job DB are untouched.
+    if (cv_style == "lebenslauf" and cv_focus == "balanced" and make_pdf
+            and 1 <= audit["stats"].get("cv_pages", 0) <= 2):
+        from .cv_policy import (
+            expand_ranked_bullets, omitted_bullet_count, selection_notes as describe_selection,
+        )
+        import tempfile
+        from pypdf import PdfReader
+        extra_max = omitted_bullet_count(profile, plan, original_plan)
+        if extra_max:
+            best_extra = 0
+            best_plan = plan
+            with tempfile.TemporaryDirectory(prefix="stellenpilot-cv-balance-") as temp_dir:
+                temp_path = Path(temp_dir)
+                candidate_dir = temp_path / "candidate"
+                candidate_dir.mkdir()
+                candidate_docx = candidate_dir / cv.name
+                candidate_pdf = candidate_docx.with_suffix(".pdf")
+                best_docx = temp_path / "best.docx"
+                best_pdf = temp_path / "best.pdf"
+
+                def try_extra(amount: int) -> bool:
+                    nonlocal best_extra, best_plan
+                    candidate = expand_ranked_bullets(profile, plan, original_plan, amount)
+                    build_cv(profile, candidate, candidate_docx, cv_style)
+                    candidate_pdf.unlink(missing_ok=True)
+                    if not to_pdf([candidate_docx]):
+                        return False
+                    try:
+                        page_count = len(PdfReader(str(candidate_pdf)).pages)
+                    except Exception:
+                        return False
+                    if page_count < 1 or page_count > 2:
+                        return False
+                    expected_candidate = [
+                        entry["bullets"][idx]
+                        for entry, selected in zip(profile.get("experience") or [],
+                                                   candidate.get("experience") or [])
+                        for idx in selected
+                    ]
+                    check = inspect_documents(candidate_docx, letter,
+                                              [candidate_pdf, letter.with_suffix(".pdf")],
+                                              expected_candidate, require_pdf=True)
+                    if not check["ok"]:
+                        return False
+                    best_extra, best_plan = amount, candidate
+                    shutil.copy2(candidate_docx, best_docx)
+                    shutil.copy2(candidate_pdf, best_pdf)
+                    return True
+
+                if not try_extra(extra_max):
+                    low, high = 1, extra_max - 1
+                    while low <= high:
+                        middle = (low + high) // 2
+                        if try_extra(middle):
+                            low = middle + 1
+                        else:
+                            high = middle - 1
+                if best_extra:
+                    shutil.copy2(best_docx, cv)
+                    shutil.copy2(best_pdf, cv.with_suffix(".pdf"))
+                    plan = best_plan
+                    selection_notes = describe_selection(profile, plan, cv_focus)
+                    noun = "belegte Tätigkeit" if best_extra == 1 else "belegte Tätigkeiten"
+                    selection_notes.insert(0, f"Automatische CV-Seitenbalance: {best_extra} zusätzliche "
+                        f"{noun} aufgenommen, ohne zwei A4-Seiten zu überschreiten.")
+                    audit = inspect_documents(cv, letter, pdfs, expected(), require_pdf=make_pdf)
 
     report = folder / "report.md"
     report.write_text("\n".join([

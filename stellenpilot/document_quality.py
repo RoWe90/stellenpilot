@@ -50,6 +50,49 @@ def letter_quality_issues(text: str, *, lang: str) -> list[str]:
     return problems
 
 
+
+# A small set of material action claims that mere tool presence cannot support.
+# This is intentionally not presented as a comprehensive semantic fact checker.
+_ACCEPTANCE = re.compile(r"\b(?:Akzeptanzkriterien|acceptance criteria)\b", re.I)
+_DEPLOYMENT = re.compile(r"\b(?:Auslieferung|Deployment|deploy(?:ed|ment)?|"
+                         r"Produktivbetrieb|produktiv ausgerollt)\b", re.I)
+_CI_TOOLS = re.compile(r"\b(?:Azure Pipelines?|CI/CD|Docker|GitHub Actions|"
+                       r"Jenkins|GitLab CI)\b", re.I)
+_PROSPECTIVE = re.compile(
+    r"\b(?:möchte|würde|künftig|will ich lernen|interessiere mich|"
+    r"would like|hope to|aim to|look forward to)\b", re.I
+)
+_OWN_EXPERIENCE = re.compile(
+    r"\b(?:ich|mir|meine|meiner|mein|habe|nutze|setze|"
+    r"my|i have|i use|i built|i delivered)\b", re.I
+)
+
+
+def unsupported_action_claims(text: str, profile_text: str) -> list[str]:
+    """Identify specific *experience* claims unsupported by the candidate facts.
+
+    The check is deliberately conservative. A mention of a prospective role
+    requirement is NOT the same thing as a claim of past experience. These
+    rules catch the previously observed acceptance-criteria and deployment
+    inferences, which technology-name/number-only guards miss.
+    """
+    issues = []
+    facts = profile_text or ""
+    sentences = [piece.strip() for piece in re.split(r"(?<=[.!?])\s+|\n+", text or "")
+                 if piece.strip()]
+    for sentence in sentences:
+        prospective = bool(_PROSPECTIVE.search(sentence))
+        first_person = bool(_OWN_EXPERIENCE.search(sentence))
+        if (_ACCEPTANCE.search(sentence) and first_person and not prospective
+                and not _ACCEPTANCE.search(facts)):
+            issues.append("unsupported_experience_acceptance_criteria")
+        if (_DEPLOYMENT.search(sentence) and _CI_TOOLS.search(sentence)
+                and first_person and not prospective
+                and not any(_DEPLOYMENT.search(line) and _CI_TOOLS.search(line)
+                            for line in facts.splitlines())):
+            issues.append("unsupported_experience_deployment")
+    return list(dict.fromkeys(issues))
+
 def inspect_documents(cv: Path, letter: Path, pdfs: list[Path] | None = None,
                       expected_bullets: list[str] | None = None,
                       require_pdf: bool = True) -> dict:
