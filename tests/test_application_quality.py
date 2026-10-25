@@ -98,8 +98,13 @@ class DocumentLayoutTests(unittest.TestCase):
             self.assertTrue(any("BERUFSERFAHRUNG" in p.text for p in doc.paragraphs))
             self.assertTrue(any("Automatisierung von Entwicklungsabläufen" in p.text
                                 for p in doc.paragraphs))
-            header = next(p for p in doc.paragraphs if "Software Developer, Example GmbH" in p.text)
+            header = next(p for p in doc.paragraphs
+                          if p.text.split("\t")[0] == "Software Developer")
             self.assertTrue(header.paragraph_format.keep_with_next)
+            self.assertTrue(any(p.text == "Example GmbH" for p in doc.paragraphs))
+            self.assertIn("2021 - heute", header.text)
+            self.assertTrue(any(PROFILE["experience"][0]["bullets"][0] in p.text
+                                for p in doc.paragraphs))
 
     def test_letter_is_din_a4_and_has_distinct_subject(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -109,6 +114,22 @@ class DocumentLayoutTests(unittest.TestCase):
             self.assertAlmostEqual(doc.sections[0].page_width.mm, 210, delta=0.6)
             self.assertTrue(any(p.text.startswith("Bewerbung als") for p in doc.paragraphs))
             self.assertTrue(any("Mein Python-Projekt" in p.text for p in doc.paragraphs))
+
+
+    def test_cv_and_letter_share_visual_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cv = Path(directory) / "cv.docx"
+            letter = Path(directory) / "letter.docx"
+            build_cv(PROFILE, keyword_plan(JOB, PROFILE), cv, style="lebenslauf")
+            build_letter(JOB, PROFILE, "Python ist mein Schwerpunkt.", letter, lang="de")
+            left, right = Document(cv), Document(letter)
+            self.assertEqual(left.styles["Normal"].font.name, "Carlito")
+            self.assertEqual(left.styles["Normal"].font.name, right.styles["Normal"].font.name)
+            self.assertEqual(left.paragraphs[0].text, right.paragraphs[0].text)
+            self.assertIn("w:pBdr", left.paragraphs[2]._p.xml)
+            self.assertIn("w:pBdr", right.paragraphs[1]._p.xml)
+            self.assertEqual(len(left.inline_shapes), 0)
+            self.assertEqual(len(right.inline_shapes), 0)
 
 
 class LetterPromptTests(unittest.TestCase):

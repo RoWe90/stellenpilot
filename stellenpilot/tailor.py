@@ -312,6 +312,9 @@ def _contact(person: dict, links: bool = True) -> str:
 
 
 def build_cv(profile: dict, plan: dict, path: Path, style: str = "classic") -> None:
+    if style == "lebenslauf":
+        from .layout_modern import build_cv as modern_cv
+        return modern_cv(profile, plan, path)
     st = CV_STYLES.get(style, CV_STYLES["classic"])
     h = st["heads"]
     person = profile.get("person") or {}
@@ -485,28 +488,9 @@ def letter_body(job: dict, profile: dict, plan: dict, llm=None, lang: str = "en"
 
 
 def build_letter(job: dict, profile: dict, body: str, path: Path, lang: str = "en") -> None:
-    person = profile.get("person") or {}
-    doc = _base_doc(10.5, 49)
-    _para(doc, person.get("name", ""), 18, bold=True)
-    _para(doc, _contact(person, links=False), 9.5)
-    de = lang == "de"
-    dp = _para(doc, date.today().strftime("%d.%m.%Y" if de else "%d %B %Y"))
-    dp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    dp.paragraph_format.space_before = Pt(12)
-    company = _para(doc, job["company"])
-    company.paragraph_format.space_before = Pt(13)
-    subject = _para(doc, f"{'Bewerbung als' if de else 'Re:'} {job['title']}", 11, bold=True)
-    subject.paragraph_format.space_before = Pt(12)
-    subject.paragraph_format.space_after = Pt(14)
-    salutation = _para(doc, "Sehr geehrte Damen und Herren," if de else "Dear Hiring Team,")
-    salutation.paragraph_format.space_after = Pt(10)
-    for para in [p.strip() for p in body.split("\n") if p.strip()]:
-        paragraph = _para(doc, para)
-        paragraph.paragraph_format.space_after = Pt(8)
-    ending = _para(doc, "Mit freundlichen Grüßen" if de else "Kind regards,")
-    ending.paragraph_format.space_before = Pt(8)
-    _para(doc, person.get("name", ""))
-    doc.save(path)
+    """Render matching editorial letterhead for all generated letters."""
+    from .layout_modern import build_letter as modern_letter
+    modern_letter(job, profile, body, path, lang)
 
 
 MAC_SOFFICE = "/Applications/LibreOffice.app/Contents/MacOS/soffice"

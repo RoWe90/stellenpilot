@@ -46,11 +46,17 @@ one complete, truthful statement without leading bullet glyphs.
 
 ## Generation and layout
 
-The DOCX renderer now explicitly uses DIN A4 (210 × 297 mm), a metrically
-compatible `Carlito` font installed in the Docker image, consistent spacing,
-and keep-with-next for section and experience headings. The existing
-`classic`, `compact` and `lebenslauf` modes remain available; the last
-uses German section names and puts dates first.
+The DOCX renderer uses DIN A4 (210 × 297 mm). Select
+`cv_style = "lebenslauf"` for the refined, restrained one-column design:
+consistent Carlito typography (provided in the Docker image), matched navy
+and teal accents, structured skill pairs, right-aligned job dates,
+distinct employer labels, and page-break protection for job headings.
+The `classic` and `compact` CV layouts remain available as alternatives.
+Cover letters automatically use the matching letterhead and subject styling.
+
+The design intentionally avoids photos, icons, graphics, text boxes and full
+page sidebars. It is editable in Word and preserves text extraction for
+Applicant Tracking Systems. It does not shorten or embellish any facts.
 
 The prompts emphasize specific experiences and job requirements rather than
 volunteering missing skills. Unsupported claims continue to be rejected.
