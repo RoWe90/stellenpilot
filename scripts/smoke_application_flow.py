@@ -22,7 +22,9 @@ from stellenpilot.llm import LLM
 from stellenpilot.tailor import profile_quality_issues, tailor_job
 
 
-def run(home: Path, job_id: str, no_llm: bool = False) -> int:
+def run(home: Path, job_id: str, no_llm: bool = False, *,
+        cv_style: str | None = None, cv_focus: str | None = None,
+        cv_education: str | None = None) -> int:
     settings = Settings(home)
     problems = profile_quality_issues(settings.profile)
     if problems:
@@ -58,9 +60,9 @@ def run(home: Path, job_id: str, no_llm: bool = False) -> int:
         make_pdf=True,
         letter_setting=tailor.get("letter_language", "auto"),
         my_german=my_german_level(settings),
-        cv_style=tailor.get("cv_style", "classic"),
-        cv_focus=tailor.get("cv_focus", "balanced"),
-        cv_education=tailor.get("cv_education", "compact"),
+        cv_style=cv_style or tailor.get("cv_style", "classic"),
+        cv_focus=cv_focus or tailor.get("cv_focus", "balanced"),
+        cv_education=cv_education or tailor.get("cv_education", "compact"),
     )
     folder = Path(result["folder"])
     report = (folder / "report.md").read_text(encoding="utf-8")
@@ -116,9 +118,15 @@ if __name__ == "__main__":
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--no-llm", action="store_true",
                         help="Only test document layout, not the AI")
+    parser.add_argument("--cv-style", choices=["classic", "compact", "lebenslauf"],
+                        help="Test this style without changing live settings")
+    parser.add_argument("--cv-focus", choices=["full", "balanced", "concise"])
+    parser.add_argument("--cv-education", choices=["full", "compact", "essential"])
     args = parser.parse_args()
     try:
-        sys.exit(run(args.home.resolve(), args.job_id, args.no_llm))
+        sys.exit(run(args.home.resolve(), args.job_id, args.no_llm,
+                     cv_style=args.cv_style, cv_focus=args.cv_focus,
+                     cv_education=args.cv_education))
     except Exception as exc:
         print(f"FAIL: {exc.__class__.__name__}: {exc}", file=sys.stderr)
         sys.exit(1)
