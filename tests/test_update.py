@@ -70,9 +70,18 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(update._downloads(release(version="0.11.9")(), "0.12.0"), {})
 
     def test_pip_install_also_gets_the_command(self):
-        with mock.patch("stellenpilot.launch.frozen", return_value=False):
+        # Force desktop Python even when the suite is running in Docker.
+        with mock.patch("stellenpilot.launch.frozen", return_value=False), \
+             mock.patch("stellenpilot.schedule.in_docker", return_value=False):
             s = self.status(fetch=release())
         self.assertIn("pip install -U stellenpilot", s["command"])
+
+    def test_docker_install_offers_compose_update_instead_of_pip(self):
+        # Docker is a different installation environment, not a regression.
+        with mock.patch("stellenpilot.launch.frozen", return_value=False), \
+             mock.patch("stellenpilot.schedule.in_docker", return_value=True):
+            s = self.status(fetch=release())
+        self.assertEqual(s["command"], "docker compose pull && docker compose up -d")
 
     def test_app_gets_no_command(self):
         with mock.patch("stellenpilot.launch.frozen", return_value=True):
