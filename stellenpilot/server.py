@@ -34,7 +34,7 @@ EDITABLE = {"search": ("keywords", "city", "radius_km", "country", "include_remo
             "sources": ("arbeitsagentur", "arbeitnow", "adzuna", "theirstack", "jobicy", "remotive", "workingstudentjobs"),
             "llm": ("provider", "model", "base_url"),
             "language": ("my_german_level",),
-            "tailor": ("min_match", "letter_language", "cv_style"),
+            "tailor": ("min_match", "letter_language", "cv_style", "cv_focus", "cv_education"),
             "schedule": ("enabled", "time"),
             "watch": ("starter_list",),
             "ui": ("language", "check_updates")}
@@ -42,6 +42,8 @@ CHOICES = {("llm", "provider"): {"none", "builtin", "ollama", "lmstudio", "llama
            ("language", "my_german_level"): {"", "A1", "A2", "B1", "B2", "C1", "C2"},
            ("tailor", "letter_language"): {"auto", "en", "de"},
            ("tailor", "cv_style"): {"classic", "compact", "lebenslauf"},
+           ("tailor", "cv_focus"): {"full", "balanced", "concise"},
+           ("tailor", "cv_education"): {"full", "compact", "essential"},
            ("ui", "language"): {"auto", "en", "de"}}
 SECRETS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENCODE_API_KEY", "ADZUNA_APP_ID", "ADZUNA_APP_KEY", "THEIRSTACK_API_KEY")
 

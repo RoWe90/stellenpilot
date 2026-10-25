@@ -82,6 +82,22 @@ class CurateTests(unittest.TestCase):
             curate(p, example_plan(p), "full", "omit_everything")
 
 
+class DashboardSettingTests(unittest.TestCase):
+    def test_cv_controls_accept_allowed_values(self):
+        from stellenpilot.server import clean_settings
+        got = clean_settings({"tailor": {
+            "cv_style": "lebenslauf", "cv_focus": "concise",
+            "cv_education": "essential",
+        }})
+        self.assertEqual(got["tailor"]["cv_focus"], "concise")
+        self.assertEqual(got["tailor"]["cv_education"], "essential")
+
+    def test_cv_controls_reject_unknown_values(self):
+        from stellenpilot.server import clean_settings
+        with self.assertRaisesRegex(ValueError, "unknown cv focus"):
+            clean_settings({"tailor": {"cv_focus": "delete-all"}})
+
+
 class RenderingTests(unittest.TestCase):
     def test_modern_skills_are_readable_without_tables(self):
         profile = example_profile()
