@@ -21,7 +21,7 @@ from pathlib import Path
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Pt, RGBColor
+from docx.shared import Mm, Pt, RGBColor
 
 from .score import RE_CACHE, _mentioned, learning_items, profile_text
 from .llm import job_ad
@@ -93,6 +93,9 @@ def unsupported_claims(text: str, profile: dict, job: dict | None = None) -> lis
 PLAN_SYSTEM = """You tailor a CV to a job ad WITHOUT inventing anything.
 You may only: choose a headline from the given list, write a 2 to 3 sentence summary that uses ONLY facts from the candidate profile, and reorder or drop items.
 Skills under "Currently learning" are NOT experience; never present them as used.
+For German job ads, write the CV summary in German as impersonal CV prose (e.g.
+"Softwareentwickler mit Erfahrung in ..."), not with "er/sie" and not in first person.
+Use concrete profile evidence and relevant projects, not generic enthusiasm.
 Do not use hyphens or dashes as punctuation in the summary. Never state language levels or fluency (no 'fluent German', no 'C1'). No numbers or tools that are not in the profile.
 Return JSON with keys:
 headline_index (int),
@@ -185,6 +188,9 @@ def make_plan(job: dict, profile: dict, llm=None) -> dict:
         except Exception as e:  # fall back to the keyword plan, never block the run
             plan["note"] = f"LLM plan failed, used keyword plan: {e}"
     plan = _valid_plan(plan, profile)
+    # Only generated summary text is polished; stored profile fields remain verbatim.
+    from .document_quality import polish_generated_german
+    plan["summary"] = polish_generated_german(plan["summary"])
     bad = unsupported_claims(plan["summary"], profile, job)
     if bad:
         plan["summary"] = _default_summary(profile)
@@ -193,10 +199,67 @@ def make_plan(job: dict, profile: dict, llm=None) -> dict:
     return plan
 
 
+
+class ProfileQualityError(ValueError):
+    """An imported CV mixed job headings and job descriptions; manual correction is required."""
+
+
+class DocumentQualityError(ValueError):
+    """The generated document files did not pass local quality checks."""
+
+
+def profile_quality_issues(profile: dict) -> list[str]:
+    """Detect obvious import corruption without rewriting someone's career history.
+
+    This is deliberately conservative: a long but legitimate bullet must survive,
+    while a job title/company full of bullet glyphs or narrative is not a valid heading.
+    """
+    issues: list[str] = []
+    for idx, role in enumerate(profile.get("experience") or [], 1):
+        for field, label in (("title", "Titel"), ("company", "Arbeitgeber")):
+            value = str(role.get(field) or "")
+            if any(mark in value for mark in ("•", "●", "▪", "", "\n", "\r")):
+                issues.append(f"Berufsstation {idx}: {label} enthält Aufzählungen oder Zeilenumbrüche")
+            elif len(value) > 135:
+                issues.append(f"Berufsstation {idx}: {label} ist ungewöhnlich lang ({len(value)} Zeichen)")
+        # PDF text extraction can shift the entire job description into the employer field
+        # without leaving bullet glyphs. Catch the common long "Company, city, Development ..."
+        # pattern, but keep ordinary short employer/location combinations valid.
+        company = str(role.get("company") or "")
+        if (len(company) > 70 and company.count(",") >= 2
+                and re.search(r"(?i),\s*(?:Entwicklung|Implementierung|Automatisierung|"
+                              r"Werkzeugentwicklung|Daten(?:vorverarbeitung|transformation))\b", company)):
+            issues.append(f"Berufsstation {idx}: Arbeitgeber enthält offenbar Tätigkeitsbeschreibungen")
+        bullets = [str(b).strip() for b in (role.get("bullets") or []) if str(b).strip()]
+        normalized = [re.sub(r"\s+", " ", b).casefold() for b in bullets]
+        if len(normalized) != len(set(normalized)):
+            issues.append(f"Berufsstation {idx}: doppelte Tätigkeitsbeschreibungen")
+        for bullet in bullets:
+            if any(glyph in bullet for glyph in ("•", "●", "▪", "")):
+                issues.append(f"Berufsstation {idx}: Stichpunkt enthält PDF-Aufzählungszeichen")
+                break
+            if bullet.count("(") != bullet.count(")"):
+                issues.append(f"Berufsstation {idx}: Stichpunkt enthält zerrissene Klammerausdrücke")
+                break
+            if re.match(r"(?i)^(?:mit dem Thema|und (?:Implementierung|Hindernisvermeidung)|"
+                        r"zum ferngesteuerten|des Backends|Pipelines, CI/CD)\b", bullet):
+                issues.append(f"Berufsstation {idx}: Stichpunkt ist vermutlich ein Satzfragment")
+                break
+    for idx, education in enumerate(profile.get("education") or [], 1):
+        degree = str(education.get("degree") or "")
+        school = str(education.get("school") or "")
+        if (degree.count("(") != degree.count(")") or school.count("(") != school.count(")")
+                or school.lower().lstrip().startswith("umorientierung")):
+            issues.append(f"Ausbildung {idx}: Abschluss und Schule wurden beim Import offenbar falsch getrennt")
+    return issues
+
+
 # ---------------------------------------------------------------- documents
 
 def _para(doc, text: str, size: float | None = None, bold: bool = False):
     p = doc.add_paragraph()
+    p.paragraph_format.space_after = Pt(3)
+    p.paragraph_format.keep_together = True
     if text:
         r = p.add_run(text)
         r.bold = bold
@@ -213,24 +276,38 @@ DE_HEADS = {"summary": "Profil", "skills": "Kenntnisse", "experience": "Berufser
 CV_STYLES = {
     "classic": {"size": 10.5, "margin": 50, "heads": EN_HEADS, "dates_first": False},
     "compact": {"size": 9.5, "margin": 36, "heads": EN_HEADS, "dates_first": False},
-    "lebenslauf": {"size": 10.5, "margin": 50, "heads": DE_HEADS, "dates_first": True},
+    "lebenslauf": {"size": 10, "margin": 43, "heads": DE_HEADS, "dates_first": True},
 }
 
 
 def _heading(doc, text):
     p = _para(doc, text.upper(), 10.5, bold=True)
     p.runs[0].font.color.rgb = RGBColor(0x1E, 0x3A, 0x8A)
-    p.paragraph_format.space_before = Pt(8)
-    p.paragraph_format.space_after = Pt(2)
+    p.paragraph_format.space_before = Pt(10)
+    p.paragraph_format.space_after = Pt(3)
+    p.paragraph_format.keep_with_next = True
 
 
 def _base_doc(size: float = 10.5, margin: int = 50) -> Document:
+    """DIN A4 on all platforms, with quiet, consistent paragraph typography."""
     doc = Document()
     st = doc.styles["Normal"]
-    st.font.name = "Calibri"
+    st.font.name = "Carlito"
     st.font.size = Pt(size)
-    for s in doc.sections:
-        s.left_margin = s.right_margin = s.top_margin = s.bottom_margin = Pt(margin)
+    st.font.color.rgb = RGBColor(0x20, 0x29, 0x36)
+    st.paragraph_format.line_spacing = 1.08
+    st.paragraph_format.space_after = Pt(3)
+    bullets = doc.styles["List Bullet"]
+    bullets.font.name = "Carlito"
+    bullets.font.size = Pt(size)
+    bullets.paragraph_format.space_after = Pt(2)
+    bullets.paragraph_format.left_indent = Pt(16)
+    bullets.paragraph_format.first_line_indent = Pt(-7)
+    for section in doc.sections:
+        section.page_width = Mm(210)
+        section.page_height = Mm(297)
+        section.left_margin = section.right_margin = Pt(margin)
+        section.top_margin = section.bottom_margin = Pt(max(margin - 7, 31))
     return doc
 
 
@@ -242,6 +319,9 @@ def _contact(person: dict, links: bool = True) -> str:
 
 
 def build_cv(profile: dict, plan: dict, path: Path, style: str = "classic") -> None:
+    if style == "lebenslauf":
+        from .layout_modern import build_cv as modern_cv
+        return modern_cv(profile, plan, path)
     st = CV_STYLES.get(style, CV_STYLES["classic"])
     h = st["heads"]
     person = profile.get("person") or {}
@@ -275,9 +355,13 @@ def build_cv(profile: dict, plan: dict, path: Path, style: str = "classic") -> N
             p.add_run(", ".join(x for x in (e.get("title"), e.get("company")) if x)).bold = True
             if e.get("dates") and not st["dates_first"]:
                 p.add_run(f"    {e['dates']}").italic = True
-            p.paragraph_format.space_after = Pt(0)
+            p.paragraph_format.space_before = Pt(5)
+            p.paragraph_format.space_after = Pt(2)
+            p.paragraph_format.keep_with_next = bool(idx)
+            p.paragraph_format.keep_together = True
             for j in idx:
-                doc.add_paragraph(e["bullets"][j], style="List Bullet")
+                bullet = doc.add_paragraph(e["bullets"][j], style="List Bullet")
+                bullet.paragraph_format.keep_together = True
 
     projs = profile.get("projects") or []
     if projs:
@@ -288,9 +372,12 @@ def build_cv(profile: dict, plan: dict, path: Path, style: str = "classic") -> N
             p.add_run(pr.get("name", "")).bold = True
             if pr.get("link"):
                 p.add_run(f"    {pr['link']}").italic = True
-            p.paragraph_format.space_after = Pt(0)
+            p.paragraph_format.space_before = Pt(5)
+            p.paragraph_format.space_after = Pt(2)
+            p.paragraph_format.keep_with_next = bool(pr.get("bullets"))
             for b in pr.get("bullets") or []:
-                doc.add_paragraph(b, style="List Bullet")
+                bullet = doc.add_paragraph(b, style="List Bullet")
+                bullet.paragraph_format.keep_together = True
 
     if profile.get("education"):
         _heading(doc, h["education"])
@@ -307,20 +394,36 @@ def build_cv(profile: dict, plan: dict, path: Path, style: str = "classic") -> N
     doc.save(path)
 
 
-LETTER_SYSTEM = """Write a short, warm, specific cover letter body (3 short paragraphs, under 230 words) for the candidate.
-Use ONLY facts from the candidate profile. No new numbers, tools, employers or achievements.
-Skills under "Currently learning" may only be described as being learned.
-If the ad names a tool the candidate lacks, mention one gap honestly: "currently learning" only for skills under "Currently learning", otherwise say plainly they have not used it yet and would like to learn it.
-Write like a person, not a template. Never state language levels or fluency (no 'fluent German', no 'C1'). Do not use hyphens or dashes as punctuation. No greeting line and no sign off.
-Return JSON: {"body": "..."}"""
+LETTER_SYSTEM = """Write the BODY of a concise, evidence-led job application letter in English.
+Use 3 short paragraphs, 140 to 220 words. No greeting, subject line or signature.
+Paragraph 1: a concrete reason this specific role fits the candidate, tied to work already done.
+Paragraph 2: one or two RELEVANT work examples from the profile, describing actions, tools and
+results actually documented. Use the provided SELECTED EVIDENCE if it fits the advertisement,
+rather than listing a technology inventory. Paragraph 3: connect these examples to the job's priorities and
+close with a confident invitation to discuss.
+Use ONLY verified profile facts; do not invent years, achievements, languages or expertise.
+Skills marked Currently learning are NOT experience. Do not volunteer missing skills or
+declare that the candidate lacks tools merely because their names do not occur in the profile.
+Never claim experience with something absent from the profile. Avoid clichés such as
+'I hereby apply', 'I am very passionate', and empty adjectives.
+Write naturally in the first person. No fabricated enthusiasm or personal knowledge of the firm.
+Return JSON only: {"body": "..."}"""
 
 
-LETTER_SYSTEM_DE = """Schreibe den Hauptteil eines kurzen, persönlichen Anschreibens auf Deutsch (3 kurze Absätze, unter 230 Wörter).
-Nutze NUR Fakten aus dem Profil der Person. Keine neuen Zahlen, Tools, Arbeitgeber oder Erfolge.
-Punkte unter "Currently learning" dürfen nur als "lerne ich gerade" beschrieben werden.
-Sprich eine Lücke ehrlich an, falls es eine gibt: "lerne ich gerade" nur für Punkte unter "Currently learning", sonst sage klar, dass die Person damit noch nicht gearbeitet hat und es gern lernen möchte.
-Schreibe natürlich, nicht wie eine Vorlage, in einfachem, korrektem Deutsch. Keine Gedankenstriche. Nenne niemals Sprachniveaus (kein "fließend", kein "C1"). Keine Anrede und keine Grußformel.
-Antworte mit JSON: {"body": "..."}"""
+LETTER_SYSTEM_DE = """Verfasse ausschließlich den HAUPTTEIL eines überzeugenden deutschen Bewerbungsanschreibens.
+Drei kurze Absätze, etwa 140 bis 220 Wörter; keine Anrede, Betreffzeile oder Grußformel.
+Absatz 1: konkreter Bezug zur ausgeschriebenen Tätigkeit und zu belegbarer Erfahrung.
+Absatz 2: ein bis zwei passende, überprüfbare Beispiele aus der Berufspraxis bzw. Projekten,
+bevorzugt aus AUSGEWÄHLTE BELEGE. Keine bloße Aufzählung von Technologie-Namen.
+Absatz 3: Nutzen dieser konkreten Erfahrungen für die fachlichen Anforderungen aus der Anzeige
+und ein sachlicher, selbstbewusster Abschluss. Keine erfundenen Kennzahlen, Ergebnisse,
+Akzeptanzkriterien, Kundenbeziehungen oder nachträglich behauptete Erfolge.
+Verwende nur nachweisbare Profilfakten. Keine erfundenen Erfolge, Zeitangaben, Tools oder Kenntnisse.
+'Learning' ist keine Berufserfahrung. Liste keine vermeintlichen Defizite auf und behaupte
+nicht, dass eine Technologie unbekannt sei, nur weil sie nicht im Profil erwähnt wird.
+Keine Floskeln wie 'hiermit bewerbe ich mich', 'reizt mich sehr', 'ehrlich gesagt'.
+Schreibe in der ersten Person, aktiv, präzise und natürlich. Keine Sprachlevel erwähnen.
+Keine Gedankenstriche als Satzzeichen. Gib ausschließlich JSON zurück: {"body": "..."}"""
 
 
 def _gap_sentence(plan: dict) -> str:
@@ -350,9 +453,7 @@ def template_letter_de(job: dict, plan: dict) -> str:
     p1 = f"hiermit bewerbe ich mich auf die Stelle {job['title']} bei {job['company']}."
     p2 = (f"In Ihrer Ausschreibung nennen Sie {covered}. Damit habe ich in meiner bisherigen Arbeit und in Projekten gearbeitet. " if covered
           else "Die Aufgaben passen gut zu dem, was ich bisher in meiner Arbeit und in Projekten gemacht habe. ")
-    if gaps:
-        p2 += _gap_sentence_de(plan)
-    p3 = "Über die Möglichkeit eines persönlichen Gesprächs freue ich mich sehr."
+    p3 = "Gern erläutere ich Ihnen im Gespräch, wie ich meine Erfahrungen in die ausgeschriebene Tätigkeit einbringen kann."
     return "\n\n".join([p1, p2.strip(), p3])
 
 
@@ -362,9 +463,7 @@ def template_letter(job: dict, plan: dict) -> str:
     para1 = f"I am applying for the {job['title']} role at {job['company']}. {plan['summary']}".strip()
     para2 = (f"Your ad mentions {covered}, which I have used in my work and projects. " if covered else
              "The role fits the work I have done in my previous positions and projects. ")
-    if gaps:
-        para2 += _gap_sentence(plan)
-    para3 = "I would be happy to talk about how I can help your team. Thank you for your time."
+    para3 = "I would welcome the opportunity to discuss how my experience relates to this role."
     return "\n\n".join([para1, para2.strip(), para3])
 
 
@@ -385,34 +484,56 @@ def letter_body(job: dict, profile: dict, plan: dict, llm=None, lang: str = "en"
     if not (llm and llm.enabled):
         return template, "Template letter (no LLM configured)."
     name = (profile.get("person") or {}).get("name", "")
-    user = f"CANDIDATE PROFILE\n{profile_text(profile)}\n\nJOB\n{job['title']} at {job['company']}\n{job_ad(job['description'], llm.max_chars)}\n\nCandidate name: {name}"
+    evidence = []
+    for entry, indexes in zip(profile.get("experience") or [], plan.get("experience") or []):
+        bullets = entry.get("bullets") or []
+        for i in indexes[:2]:
+            if type(i) is int and 0 <= i < len(bullets):
+                evidence.append(f"{entry.get('title', '')}: {bullets[i]}")
+        if len(evidence) >= 7:
+            break
+    user = (f"CANDIDATE PROFILE\n{profile_text(profile)}\n\nSELECTED EVIDENCE "
+            f"(only quote when relevant to the job)\n" + "\n".join(evidence) +
+            f"\n\nJOB\n{job['title']} at {job['company']}\n{job_ad(job['description'], llm.max_chars)}"
+            f"\n\nCandidate name: {name}")
+    from .document_quality import (
+        polish_generated_german, letter_quality_issues, unsupported_action_claims,
+    )
     bad: list[str] = []
-    for _ in range(2):
+    best_valid = ""
+    for attempt in range(2):
         try:
-            body = str(llm.complete_json(LETTER_SYSTEM_DE if lang == "de" else LETTER_SYSTEM, user, max_tokens=900).get("body") or "")
+            body = str(llm.complete_json(LETTER_SYSTEM_DE if lang == "de" else LETTER_SYSTEM,
+                                         user, max_tokens=900).get("body") or "")
         except Exception as e:
-            return template, f"LLM letter failed ({e}), template used."
+            return (best_valid, f"LLM revision failed ({type(e).__name__}); original safe draft used."
+                    ) if best_valid else (template, f"LLM letter failed ({e}), template used.")
+        if lang == "de":
+            body = polish_generated_german(body)
         bad = unsupported_claims(body, profile, job)
+        # A known tool is not proof of a particular action: CI/CD and Docker
+        # alone do not establish deployment, and data validation alone does
+        # not establish writing acceptance criteria.
+        bad += unsupported_action_claims(body, profile_text(profile, include_learning=False))
+        bad = list(dict.fromkeys(bad))
+        style_issues = letter_quality_issues(body, lang=lang)
         if body and not bad:
-            return body, ""
-        user += f"\n\nYour previous draft mentioned {bad}, which are not backed by the profile. Remove them. Only if the ad asks for one, you may say plainly that the candidate has not used it yet."
+            best_valid = body
+            if not style_issues:
+                return body, ""
+        if attempt == 0:
+            user += ("\n\nRevise the draft. Use only facts from the candidate profile. "
+                     f"Unsupported claims: {bad}. Format/style problems: {style_issues}. "
+                     "Use three concise paragraphs, concrete selected evidence and no generic filler.")
+    if best_valid:
+        return best_valid, "Safe AI letter retained, but some stylistic checks still need a human review."
     return template, f"LLM drafts mentioned things not in your experience ({bad}), so a template letter was used."
 
 
 def build_letter(job: dict, profile: dict, body: str, path: Path, lang: str = "en") -> None:
-    person = profile.get("person") or {}
-    doc = _base_doc()
-    _para(doc, person.get("name", ""), bold=True)
-    _para(doc, _contact(person, links=False))
-    de = lang == "de"
-    _para(doc, date.today().strftime("%d.%m.%Y" if de else "%d %B %Y")).alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    _para(doc, f"{job['company']}\n{'Bewerbung als' if de else 'Re:'} {job['title']}")
-    _para(doc, "Sehr geehrte Damen und Herren," if de else "Dear Hiring Team,")
-    for para in [p.strip() for p in body.split("\n") if p.strip()]:
-        _para(doc, para)
-    _para(doc, "Mit freundlichen Grüßen" if de else "Kind regards,")
-    _para(doc, person.get("name", ""))
-    doc.save(path)
+    """Render matching editorial letterhead for all generated letters."""
+    from .layout_modern import build_letter as modern_letter
+    modern_letter(job, profile, body, path, lang)
 
 
 MAC_SOFFICE = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
@@ -457,7 +578,11 @@ def slug(s: str, n: int = 40) -> str:
 
 
 def tailor_job(job: dict, profile: dict, out_root: Path, llm=None, make_pdf: bool = True,
-               letter_setting: str = "auto", my_german: str = "A2", cv_style: str = "classic") -> dict:
+               letter_setting: str = "auto", my_german: str = "A2", cv_style: str = "classic",
+               cv_focus: str = "balanced", cv_education: str = "compact") -> dict:
+    issues = profile_quality_issues(profile)
+    if issues:
+        raise ProfileQualityError("Bitte profile.toml prüfen: " + "; ".join(issues[:6]))
     person = profile.get("person") or {}
     # Company plus title, so two roles at one company never overwrite each other.
     folder = out_root / date.today().isoformat() / f"{slug(job['company'], 30)}__{slug(job['title'], 40)}"
@@ -466,6 +591,11 @@ def tailor_job(job: dict, profile: dict, out_root: Path, llm=None, make_pdf: boo
     steps = 4 if make_pdf else 3
     progress.stage("Choosing the experience, projects and skills that fit this job", expect=700, step=1, steps=steps)
     plan = make_plan(job, profile, llm)
+    original_plan = plan
+    selection_notes = []
+    if cv_style == "lebenslauf":
+        from .cv_policy import curate
+        plan, selection_notes = curate(profile, original_plan, cv_focus, cv_education)
     who = slug(person.get("name", "CV"))
     cv = folder / f"{who}_CV_{slug(job['company'], 30)}.docx"
     build_cv(profile, plan, cv, cv_style)
@@ -480,6 +610,103 @@ def tailor_job(job: dict, profile: dict, out_root: Path, llm=None, make_pdf: boo
                       "letter suggests a higher level than you have; consider letter_language = \"en\" or say your level in the letter.")
     letter = folder / f"{who}_{'Anschreiben' if lang == 'de' else 'Cover_Letter'}_{slug(job['company'], 30)}.docx"
     build_letter(job, profile, body, letter, lang)
+    if make_pdf:
+        progress.stage("Making the PDF files", step=4, steps=steps)
+    pdfs = to_pdf([cv, letter]) if make_pdf else []
+    from .document_quality import inspect_documents
+    def expected():
+        return [entry["bullets"][idx]
+                for entry, selected in zip(profile.get("experience") or [], plan.get("experience") or [])
+                for idx in selected]
+    audit = inspect_documents(cv, letter, pdfs, expected(), require_pdf=make_pdf)
+
+    # If actual A4 PDF pagination exceeds two pages, retry once with fewer
+    # lower-ranked verbatim bullets. Never scale the type below legibility.
+    if (cv_style == "lebenslauf" and cv_focus == "balanced" and make_pdf
+            and audit["stats"].get("cv_pages", 0) > 2):
+        from .cv_policy import curate
+        plan, selection_notes = curate(profile, original_plan, "concise", cv_education)
+        build_cv(profile, plan, cv, cv_style)
+        cv_pdf = cv.with_suffix(".pdf")
+        cv_pdf.unlink(missing_ok=True)
+        new_pdfs = to_pdf([cv])
+        pdfs = [p for p in pdfs if p != cv_pdf] + new_pdfs
+        audit = inspect_documents(cv, letter, pdfs, expected(), require_pdf=make_pdf)
+        selection_notes.insert(0, "CV automatisch auf knappe Auswahl umgestellt, da "
+                                    "der PDF-Export sonst mehr als zwei Seiten benötigte.")
+
+    # A CV that already fits in two pages should not unnecessarily omit
+    # relevant, verified experience. Try adding the remaining source bullets
+    # back, up to the A4 two-page limit. Candidate renders live in a temporary
+    # directory and only a verified better result replaces the current CV.
+    # The letter is untouched; the source profile and job DB are untouched.
+    if (cv_style == "lebenslauf" and cv_focus == "balanced" and make_pdf
+            and 1 <= audit["stats"].get("cv_pages", 0) <= 2):
+        from .cv_policy import (
+            expand_ranked_bullets, omitted_bullet_count, selection_notes as describe_selection,
+        )
+        import tempfile
+        from pypdf import PdfReader
+        extra_max = omitted_bullet_count(profile, plan, original_plan)
+        if extra_max:
+            best_extra = 0
+            best_plan = plan
+            with tempfile.TemporaryDirectory(prefix="stellenpilot-cv-balance-") as temp_dir:
+                temp_path = Path(temp_dir)
+                candidate_dir = temp_path / "candidate"
+                candidate_dir.mkdir()
+                candidate_docx = candidate_dir / cv.name
+                candidate_pdf = candidate_docx.with_suffix(".pdf")
+                best_docx = temp_path / "best.docx"
+                best_pdf = temp_path / "best.pdf"
+
+                def try_extra(amount: int) -> bool:
+                    nonlocal best_extra, best_plan
+                    candidate = expand_ranked_bullets(profile, plan, original_plan, amount)
+                    build_cv(profile, candidate, candidate_docx, cv_style)
+                    candidate_pdf.unlink(missing_ok=True)
+                    if not to_pdf([candidate_docx]):
+                        return False
+                    try:
+                        page_count = len(PdfReader(str(candidate_pdf)).pages)
+                    except Exception:
+                        return False
+                    if page_count < 1 or page_count > 2:
+                        return False
+                    expected_candidate = [
+                        entry["bullets"][idx]
+                        for entry, selected in zip(profile.get("experience") or [],
+                                                   candidate.get("experience") or [])
+                        for idx in selected
+                    ]
+                    check = inspect_documents(candidate_docx, letter,
+                                              [candidate_pdf, letter.with_suffix(".pdf")],
+                                              expected_candidate, require_pdf=True)
+                    if not check["ok"]:
+                        return False
+                    best_extra, best_plan = amount, candidate
+                    shutil.copy2(candidate_docx, best_docx)
+                    shutil.copy2(candidate_pdf, best_pdf)
+                    return True
+
+                if not try_extra(extra_max):
+                    low, high = 1, extra_max - 1
+                    while low <= high:
+                        middle = (low + high) // 2
+                        if try_extra(middle):
+                            low = middle + 1
+                        else:
+                            high = middle - 1
+                if best_extra:
+                    shutil.copy2(best_docx, cv)
+                    shutil.copy2(best_pdf, cv.with_suffix(".pdf"))
+                    plan = best_plan
+                    selection_notes = describe_selection(profile, plan, cv_focus)
+                    noun = "belegte Tätigkeit" if best_extra == 1 else "belegte Tätigkeiten"
+                    selection_notes.insert(0, f"Automatische CV-Seitenbalance: {best_extra} zusätzliche "
+                        f"{noun} aufgenommen, ohne zwei A4-Seiten zu überschreiten.")
+                    audit = inspect_documents(cv, letter, pdfs, expected(), require_pdf=make_pdf)
+
     report = folder / "report.md"
     report.write_text("\n".join([
         f"# {job['title']} at {job['company']}",
@@ -488,11 +715,18 @@ def tailor_job(job: dict, profile: dict, out_root: Path, llm=None, make_pdf: boo
         "## Covered by your experience", *[f"* {c}" for c in plan["covered"]], "",
         "## You are learning these", *[f"* {c}" for c in plan["learning"]], "",
         "## Missing (say so honestly if asked)", *[f"* {m}" for m in plan["missing"]], "",
+        "## CV-Auswahl", *([f"* {n}" for n in selection_notes] or ["* Alle relevanten Einträge beibehalten."]), "",
+        "## Dokumentenprüfung",
+        f"* Status: {'PASS' if audit['ok'] else 'FEHLER'}",
+        f"* CV-Seiten: {audit['stats'].get('cv_pages', 'nicht geprüft')}; "
+        f"Anschreiben-Seiten: {audit['stats'].get('letter_pages', 'nicht geprüft')}",
+        *([f"* {i['severity'].upper()} [{i['code']}]: {i['detail']}" for i in audit["issues"]]
+          or ["* Keine automatisiert erkennbaren Probleme."]), "",
         "## Notes", "* Read both documents before sending. The truth guard checks tools and numbers, not every claim.",
         *[f"* {n}" for n in (level_note, plan.get("note"), plan.get("guard"), note) if n],
     ]) + "\n", encoding="utf-8")
-    if make_pdf:
-        progress.stage("Making the PDF files", step=4, steps=steps)
-    pdfs = to_pdf([cv, letter]) if make_pdf else []
+    if not audit["ok"]:
+        raise DocumentQualityError("Automatische Dokumentenprüfung fehlgeschlagen. "
+                                   f"Details: {report}")
     return {"folder": str(folder), "files": [str(p) for p in (cv, letter, report, *pdfs)],
-            "coverage": plan["coverage"], "cv_style": cv_style if cv_style in CV_STYLES else "classic"}
+            "coverage": plan["coverage"], "quality": audit, "cv_style": cv_style if cv_style in CV_STYLES else "classic"}

@@ -851,7 +851,11 @@ body.wizopen{overflow:hidden}
               <label>Cover letter language
                 <select class="input" name="letter_language"><option value="auto">Automatic</option><option value="en">Always English</option><option value="de">Always German</option></select></label>
               <label>CV layout
-                <select class="input" name="cv_style"><option value="classic">Classic, one column</option><option value="compact">Compact, fits more on a page</option><option value="lebenslauf">German Lebenslauf, dates first</option></select></label>
+                <select class="input" name="cv_style"><option value="classic">Classic, one column</option><option value="compact">Compact, fits more on a page</option><option value="lebenslauf">Modern German Lebenslauf, ATS-friendly</option></select></label>
+              <label>CV detail
+                <select class="input" name="cv_focus"><option value="balanced">Balanced (recommended)</option><option value="full">Full work history</option><option value="concise">Concise</option></select></label>
+              <label>Education detail
+                <select class="input" name="cv_education"><option value="compact">Compact, keep all</option><option value="full">Expanded, keep all</option><option value="essential">Only completed qualifications</option></select></label>
             </div>
             <p class="hint">Match goes from 0 to 100. Automatic writes German letters only if your German is B2 or better.</p>
           </section>
@@ -1750,8 +1754,16 @@ main.addEventListener("click",async e=>{
   if(b.dataset.go){goJob(b.dataset.go,b.dataset.open);return}
   if(b.dataset.applied){await save(b.dataset.applied,{status:"applied",statusSource:"manual",statusUpdatedAt:new Date().toISOString(),statusNote:"Marked applied on Home"},"Moved to Applications");return}
   if(b.dataset.skip){await save(b.dataset.skip,{status:"skipped",statusSource:"manual",statusUpdatedAt:new Date().toISOString(),statusNote:"Posting closed"},"Moved to skipped");return}
-  if(b.dataset.openFolder){try{await api("POST","/api/open-folder/"+encodeURIComponent(b.dataset.openFolder));toast("Folder opened")}catch(e){toast(e.message)}return}
-  if(b.dataset.doc){try{await api("POST","/api/open-doc/"+encodeURIComponent(b.dataset.id)+"/"+b.dataset.doc);toast("Opening the "+(b.dataset.doc==="cv"?"CV":"cover letter"))}catch(e){toast(e.message)}return}
+  if(b.dataset.openFolder){try{
+    const r=await api("POST","/api/open-folder/"+encodeURIComponent(b.dataset.openFolder));
+    if(r.downloadUrl){window.location.assign(r.downloadUrl);toast("Downloading documents as ZIP")}
+    else toast("Folder opened")
+  }catch(e){toast(e.message)}return}
+  if(b.dataset.doc){try{
+    const r=await api("POST","/api/open-doc/"+encodeURIComponent(b.dataset.id)+"/"+b.dataset.doc);
+    if(r.downloadUrl){window.location.assign(r.downloadUrl);toast("Downloading "+(b.dataset.doc==="cv"?"CV":"cover letter"))}
+    else toast("Opening the "+(b.dataset.doc==="cv"?"CV":"cover letter"))
+  }catch(e){toast(e.message)}return}
   if(b.dataset.make){const t=b.textContent,id=b.dataset.make;b.disabled=true;b.textContent="Writing your CV and cover letter…";
     try{await withProgress("docs:"+id,()=>api("POST","/api/docs/"+encodeURIComponent(id)),
         p=>{b.textContent=`${p.steps?t("Step {a} of {b}: ",{a:p.step,b:p.steps}):""}${ts(p.stage)}${p.percent!=null?` (${p.percent}%)`:""}… ${mmss(p.elapsed||0)}`});toast("Documents ready");lastState="";await refresh()}catch(e){toast(e.message);b.disabled=false;b.textContent=t}return}
@@ -2018,7 +2030,7 @@ $("cvSave").addEventListener("click",async()=>{
 let cvPrompted=false;
 
 /* ---------- Settings ---------- */
-const SETF={search:["keywords","city","radius_km","country","include_remote","max_age_days","exclude_title_words"],sources:["arbeitsagentur","arbeitnow","adzuna","theirstack","jobicy","remotive","workingstudentjobs"],llm:["provider","model","base_url"],language:["my_german_level"],tailor:["min_match","letter_language","cv_style"],schedule:["enabled","time"],watch:["starter_list"],ui:["language","check_updates"]};
+const SETF={search:["keywords","city","radius_km","country","include_remote","max_age_days","exclude_title_words"],sources:["arbeitsagentur","arbeitnow","adzuna","theirstack","jobicy","remotive","workingstudentjobs"],llm:["provider","model","base_url"],language:["my_german_level"],tailor:["min_match","letter_language","cv_style","cv_focus","cv_education"],schedule:["enabled","time"],watch:["starter_list"],ui:["language","check_updates"]};
 function showKeys(){$("setForm").querySelectorAll(".srcrow").forEach(r=>{const on=r.querySelector('input[type=checkbox]').checked;r.querySelectorAll(".g2,.keyhelp,label:not(.check)").forEach(el=>el.hidden=!on)})}
 $("setForm").addEventListener("change",e=>{if(e.target.closest(".srcrow"))showKeys()});
 $("setForm").addEventListener("click",async e=>{const b=e.target.closest("[data-clear-key]");if(!b)return;e.preventDefault();

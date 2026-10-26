@@ -1,6 +1,7 @@
 """Local dashboard server on the standard library. Binds to 127.0.0.1 only."""
 from __future__ import annotations
 
+import io
 import json
 import re
 import os
@@ -8,12 +9,13 @@ import math
 import subprocess
 import sys
 import threading
+import zipfile
 from collections import Counter
 from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 from . import schedule
 from .db import DB, STATUSES, local_day
@@ -32,7 +34,7 @@ EDITABLE = {"search": ("keywords", "city", "radius_km", "country", "include_remo
             "sources": ("arbeitsagentur", "arbeitnow", "adzuna", "theirstack", "jobicy", "remotive", "workingstudentjobs"),
             "llm": ("provider", "model", "base_url"),
             "language": ("my_german_level",),
-            "tailor": ("min_match", "letter_language", "cv_style"),
+            "tailor": ("min_match", "letter_language", "cv_style", "cv_focus", "cv_education"),
             "schedule": ("enabled", "time"),
             "watch": ("starter_list",),
             "ui": ("language", "check_updates")}
@@ -40,6 +42,8 @@ CHOICES = {("llm", "provider"): {"none", "builtin", "ollama", "lmstudio", "llama
            ("language", "my_german_level"): {"", "A1", "A2", "B1", "B2", "C1", "C2"},
            ("tailor", "letter_language"): {"auto", "en", "de"},
            ("tailor", "cv_style"): {"classic", "compact", "lebenslauf"},
+           ("tailor", "cv_focus"): {"full", "balanced", "concise"},
+           ("tailor", "cv_education"): {"full", "compact", "essential"},
            ("ui", "language"): {"auto", "en", "de"}}
 SECRETS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENCODE_API_KEY", "ADZUNA_APP_ID", "ADZUNA_APP_KEY", "THEIRSTACK_API_KEY")
 
@@ -260,16 +264,55 @@ def fill_lifts(jobs: list[dict], profile: dict) -> None:
         j["lift"] = lifts(j, profile) if profile and not j.get("closed") else []
 
 
-def find_doc(job, kind: str, out_root: Path) -> Path | None:
-    """The CV or cover letter in a job's folder, PDF first. Only inside the output folder."""
-    if not job or not job["folder"] or kind not in ("cv", "letter"):
+# Avoid reading or archiving arbitrary host files if an output directory contains
+# symlinks or unexpected filenames. Documents are always associated with a stored job.
+MAX_BROWSER_DOCUMENT_BYTES = 100_000_000
+MAX_BROWSER_ARCHIVE_FILES = 50
+
+
+def job_document_folder(job, out_root: Path) -> Path | None:
+    """Resolve a stored job's document directory, never accepting paths outside output/."""
+    if not job or not job.get("folder"):
         return None
     folder = Path(job["folder"]).resolve()
     if not folder.is_dir() or out_root not in folder.parents:
         return None
+    return folder
+
+
+def downloadable_files(folder: Path) -> list[Path]:
+    """Only ordinary PDFs and DOCX files directly in the validated folder."""
+    return sorted(
+        (p for p in folder.iterdir()
+         if p.is_file() and not p.is_symlink() and p.resolve().parent == folder
+         and p.suffix.lower() in (".pdf", ".docx")),
+        key=lambda p: p.name,
+    )
+
+
+def find_doc(job, kind: str, out_root: Path) -> Path | None:
+    """The CV or cover letter in a job's folder, PDF first. Only inside the output folder."""
+    folder = job_document_folder(job, out_root)
+    if not folder or kind not in ("cv", "letter"):
+        return None
     marks = ("_CV_",) if kind == "cv" else ("_Cover_Letter_", "_Anschreiben_")
-    found = [f for f in folder.iterdir() if any(m in f.name for m in marks) and f.suffix in (".pdf", ".docx")]
-    return min(found, key=lambda f: f.suffix != ".pdf", default=None)
+    found = [p for p in downloadable_files(folder) if any(m in p.name for m in marks)]
+    return min(found, key=lambda p: p.suffix.lower() != ".pdf", default=None)
+
+
+def make_document_archive(files: list[Path]) -> bytes:
+    """Return a bounded ZIP of a job's generated documents (no arbitrary folder traversal)."""
+    if not files:
+        raise ValueError("No generated documents available for download")
+    if len(files) > MAX_BROWSER_ARCHIVE_FILES:
+        raise ValueError("Too many documents to bundle; download them individually")
+    if sum(p.stat().st_size for p in files) > MAX_BROWSER_DOCUMENT_BYTES:
+        raise ValueError("Document folder is too large to download as a ZIP")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for file in files:
+            archive.write(file, arcname=file.name)
+    return buf.getvalue()
 
 
 def reread_offer(settings) -> bool:
@@ -324,6 +367,19 @@ def make_handler(settings, port: int = 8765):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(data)
+
+        def _send_attachment(self, content: bytes, filename: str, ctype: str):
+            """Deliver a browser download instead of launching a GUI inside Docker."""
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            # RFC 5987 encoded names avoid header injection from job/company names.
+            self.send_header("Content-Disposition",
+                             f"attachment; filename=\"document\"; filename*=UTF-8''{quote(filename, safe='')}")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(content)
 
         @staticmethod
         def _local(hostport: str | None) -> bool:
@@ -402,6 +458,32 @@ def make_handler(settings, port: int = 8765):
                 return self._send(200, icon, "image/png")
             if self.path in fonts:
                 return self._send(200, fonts[self.path], "font/woff2")
+            if self.path.startswith("/api/download-doc/"):
+                job_id, separator, kind = unquote(self.path[len("/api/download-doc/"):]).rpartition("/")
+                doc = find_doc(db.job(job_id), kind, out_root) if separator else None
+                if not doc:
+                    return self._send(404, {"error": "Document not found"})
+                try:
+                    if doc.stat().st_size > MAX_BROWSER_DOCUMENT_BYTES:
+                        return self._send(413, {"error": "Document is too large to download"})
+                    content = doc.read_bytes()
+                except OSError:
+                    return self._send(404, {"error": "Document is no longer available"})
+                ctype = ("application/pdf" if doc.suffix.lower() == ".pdf"
+                         else "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                return self._send_attachment(content, doc.name, ctype)
+            if self.path.startswith("/api/download-folder/"):
+                job_id = unquote(self.path[len("/api/download-folder/"):])
+                folder = job_document_folder(db.job(job_id), out_root)
+                if not folder:
+                    return self._send(404, {"error": "Document folder not found"})
+                try:
+                    content = make_document_archive(downloadable_files(folder))
+                except ValueError as exc:
+                    return self._send(413, {"error": str(exc)})
+                except OSError:
+                    return self._send(500, {"error": "Could not prepare the documents ZIP"})
+                return self._send_attachment(content, folder.name + ".zip", "application/zip")
             if self.path == "/api/state":
                 jobs = db.jobs()
                 fill_skills(jobs, settings.profile)
@@ -470,17 +552,25 @@ def make_handler(settings, port: int = 8765):
 
         def _post(self):
             if self.path.startswith("/api/open-folder/"):
-                job = db.job(unquote(self.path[len("/api/open-folder/"):]))
-                folder = Path(job["folder"]).resolve() if job and job["folder"] else None
-                if not folder or not folder.is_dir() or out_root not in folder.parents:
+                job_id = unquote(self.path[len("/api/open-folder/"):])
+                folder = job_document_folder(db.job(job_id), out_root)
+                if not folder:
                     return self._send(400, {"error": "No document folder for this job yet"})
+                if schedule.in_docker():
+                    if not downloadable_files(folder):
+                        return self._send(400, {"error": "No generated documents to download"})
+                    return self._send(200, {"ok": True, "downloadUrl":
+                                             "/api/download-folder/" + quote(job_id, safe="")})
                 open_in_file_manager(str(folder))
                 return self._send(200, {"ok": True})
             if self.path.startswith("/api/open-doc/"):
-                job_id, _, kind = unquote(self.path[len("/api/open-doc/"):]).rpartition("/")
-                doc = find_doc(db.job(job_id), kind, out_root)
+                job_id, sep, kind = unquote(self.path[len("/api/open-doc/"):]).rpartition("/")
+                doc = find_doc(db.job(job_id), kind, out_root) if sep else None
                 if not doc:
                     return self._send(400, {"error": "This document is not there yet"})
+                if schedule.in_docker():
+                    return self._send(200, {"ok": True, "downloadUrl":
+                                             "/api/download-doc/" + quote(job_id, safe="") + "/" + kind})
                 open_in_file_manager(str(doc))
                 return self._send(200, {"ok": True})
             if self.path.startswith("/api/docs/"):
