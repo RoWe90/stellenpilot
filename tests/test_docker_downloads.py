@@ -150,7 +150,7 @@ class BrowserDocumentsTest(unittest.TestCase):
                 mock.patch("stellenpilot.server.open_in_file_manager") as opener:
             result = self._post(f"/api/open-doc/{self.id}/cv")
             self.assertEqual(result, {"ok": True})
-            opener.assert_called_once_with(str(self.cv))
+            opener.assert_called_once_with(str(self.cv.resolve()))
 
 
 if __name__ == "__main__":
