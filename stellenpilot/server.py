@@ -19,7 +19,7 @@ from urllib.parse import quote, unquote
 
 from . import schedule
 from .db import DB, STATUSES, local_day
-from .pay import BLUE_CARD, fill_pay
+from .pay import blue_card_info, fill_pay
 from .score import lifts, unlocks
 
 CAMEL = {"id": "_id", "status_source": "statusSource", "status_updated_at": "statusUpdatedAt",
@@ -42,7 +42,7 @@ EDITABLE = {"search": ("keywords", "city", "radius_km", "country", "include_remo
 CHOICES = {("llm", "provider"): {"none", "builtin", "ollama", "lmstudio", "llamacpp", "vllm", "local", "anthropic", "openai", "opencode"},
            ("language", "my_german_level"): {"", "A1", "A2", "B1", "B2", "C1", "C2"},
            ("tailor", "letter_language"): {"auto", "en", "de"},
-           ("tailor", "cv_style"): {"classic", "compact", "lebenslauf"},
+           ("tailor", "cv_style"): {"modern", "classic", "compact", "lebenslauf"},
            ("tailor", "cv_focus"): {"full", "balanced", "concise"},
            ("tailor", "cv_education"): {"full", "compact", "essential"},
            ("ui", "language"): {"auto", "en", "de"}}
@@ -271,23 +271,34 @@ MAX_BROWSER_DOCUMENT_BYTES = 100_000_000
 MAX_BROWSER_ARCHIVE_FILES = 50
 
 
+def in_output(folder: Path, out_root: Path) -> bool:
+    """Accept current job folders and folders under the previous default output root."""
+    return folder.is_dir() and any(
+        root.resolve() in folder.parents for root in (out_root, out_root.parent / "output")
+    )
+
+
 def job_document_folder(job, out_root: Path) -> Path | None:
     """Resolve a stored job's document directory, never accepting paths outside output/."""
     if not job or not job.get("folder"):
         return None
     folder = Path(job["folder"]).resolve()
-    if not folder.is_dir() or out_root not in folder.parents:
+    if not in_output(folder, out_root):
         return None
     return folder
 
 
 def downloadable_files(folder: Path) -> list[Path]:
-    """Only ordinary PDFs and DOCX files directly in the validated folder."""
+    """Ordinary PDFs and DOCX files in a job folder and its non-symlink edit/ folder."""
+    directories = [folder]
+    edit = folder / "edit"
+    if edit.is_dir() and not edit.is_symlink() and edit.resolve().parent == folder:
+        directories.append(edit)
     return sorted(
-        (p for p in folder.iterdir()
-         if p.is_file() and not p.is_symlink() and p.resolve().parent == folder
+        (p for directory in directories for p in directory.iterdir()
+         if p.is_file() and not p.is_symlink() and p.resolve().parent == directory
          and p.suffix.lower() in (".pdf", ".docx")),
-        key=lambda p: p.name,
+        key=lambda p: str(p.relative_to(folder)),
     )
 
 
@@ -297,11 +308,11 @@ def find_doc(job, kind: str, out_root: Path) -> Path | None:
     if not folder or kind not in ("cv", "letter"):
         return None
     marks = ("_CV_",) if kind == "cv" else ("_Cover_Letter_", "_Anschreiben_")
-    found = [p for p in downloadable_files(folder) if any(m in p.name for m in marks)]
+    found = [p for p in downloadable_files(folder) if any(m in p.stem + "_" for m in marks)]
     return min(found, key=lambda p: p.suffix.lower() != ".pdf", default=None)
 
 
-def make_document_archive(files: list[Path]) -> bytes:
+def make_document_archive(files: list[Path], folder: Path | None = None) -> bytes:
     """Return a bounded ZIP of a job's generated documents (no arbitrary folder traversal)."""
     if not files:
         raise ValueError("No generated documents available for download")
@@ -312,7 +323,7 @@ def make_document_archive(files: list[Path]) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for file in files:
-            archive.write(file, arcname=file.name)
+            archive.write(file, arcname=str(file.relative_to(folder)) if folder else file.name)
     return buf.getvalue()
 
 
@@ -445,7 +456,7 @@ def make_handler(settings, port: int = 8765):
         def do_POST(self):
             if not self._guard():
                 return
-            if self.path in SLOW_POSTS or self.path.startswith(("/api/docs/", "/api/prep/")):
+            if self.path in SLOW_POSTS or self.path.startswith(("/api/docs/", "/api/prep/", "/api/mock/")):
                 # Adding a job (fetch, AI scoring, maybe tailoring) and Gmail sync can take minutes with a
                 # local model. They use their own database connection so the dashboard stays responsive.
                 return self._post()
@@ -479,7 +490,7 @@ def make_handler(settings, port: int = 8765):
                 if not folder:
                     return self._send(404, {"error": "Document folder not found"})
                 try:
-                    content = make_document_archive(downloadable_files(folder))
+                    content = make_document_archive(downloadable_files(folder), folder)
                 except ValueError as exc:
                     return self._send(413, {"error": str(exc)})
                 except OSError:
@@ -497,9 +508,10 @@ def make_handler(settings, port: int = 8765):
                     "weekly": weekly_summary(jobs),
                     "unlocks": unlocks(jobs, settings.profile, settings["tailor"]["min_match"]),
                     "diagnosis": diagnosis(jobs),
-                    "blueCard": BLUE_CARD,
+                    "blueCard": blue_card_info(),
                     "visaHints": bool(settings["ui"].get("visa_hints")),
                     "gmailEnabled": bool(settings["gmail"].get("enabled")),
+                    "aiEnabled": settings["llm"].get("provider", "none") != "none",
                     "subtitle": subtitle(),
                     "firstName": (str(settings.profile.get("person", {}).get("name") or "").split() or [""])[0],
                     "run": run_state,
@@ -551,6 +563,11 @@ def make_handler(settings, port: int = 8765):
                     if any(not 0 <= x < 4 for x in done):
                         raise ValueError("prepDone steps are 0 to 3")
                     fields["prep_done"] = ",".join(map(str, done))
+                if "mock" in body:  # saved mock-interview answers and ratings, a JSON string
+                    raw = str(body["mock"])[:20000]
+                    if raw.strip():
+                        json.loads(raw)  # must be valid JSON; raises ValueError (400) otherwise
+                    fields["mock"] = raw
                 if "closed" in body:
                     fields["closed"] = int(_as_bool(body["closed"], "closed"))
                 if fields:
@@ -618,6 +635,33 @@ def make_handler(settings, port: int = 8765):
                 finally:
                     own.conn.close()
                 return self._send(200, {"ok": True})
+            if self.path in ("/api/mock/grade", "/api/mock/stronger"):
+                from .pipeline import grade_answer, stronger_answer
+                from .llm import LLM
+                from . import progress
+                body = self._body()
+                job_id, question, answer = body.get("id", ""), (body.get("question") or "").strip(), (body.get("answer") or "").strip()
+                if not answer:
+                    return self._send(400, {"error": "Write an answer first."})
+                own = DB(settings.db_path)
+                try:
+                    job = own.job(job_id)
+                    if not job:
+                        return self._send(404, {"error": "unknown job"})
+                    llm = LLM(settings)
+                    if not getattr(llm, "enabled", False):
+                        return self._send(400, {"error": "Turn on an AI in Settings to get feedback, or rate your own answer."})
+                    stronger = self.path.endswith("stronger")
+                    with progress.track("mock:" + job_id, "Reading your answer"):
+                        out = ({"stronger": stronger_answer(job, settings.profile, question, answer, llm)} if stronger
+                               else grade_answer(job, settings.profile, question, answer, llm))
+                except progress.Busy:
+                    return self._send(409, {"error": "Still reading your last answer."})
+                except Exception as e:
+                    return self._send(500, {"error": f"Could not read your answer: {e}"})
+                finally:
+                    own.conn.close()
+                return self._send(200, out)
             if self.path == "/api/add":
                 from .manual import AddError, add_job
                 try:

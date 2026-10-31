@@ -2,7 +2,7 @@
 import unittest
 from datetime import date
 
-from stellenpilot.pay import BLUE_CARD, blue_card, deadline, fill_pay, salary
+from stellenpilot.pay import PENSION_CEILING, blue_card, blue_card_info, blue_card_lines, deadline, fill_pay, salary
 
 
 class SalaryTests(unittest.TestCase):
@@ -25,6 +25,16 @@ class SalaryTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIsNone(salary(text))
 
+    def test_a_ceiling_is_not_the_pay(self):
+        # "up to" says nothing about the floor, so it must not pass the Blue Card check
+        for text in ("Salary: up to €60k per year", "Gehalt bis zu 60.000 € brutto", "Jahresgehalt max. 65k €",
+                     "Vergütung höchstens 58.000 EUR p.a."):
+            with self.subTest(text=text):
+                self.assertIsNone(salary(text))
+        # a floor and a "bis" range still read
+        self.assertEqual(salary("Gehalt: ab 55k € brutto im Jahr"), (55000, 55000))
+        self.assertEqual(salary("Jahresgehalt 55.000 bis 65.000 EUR"), (55000, 65000))
+
 
 class DeadlineTests(unittest.TestCase):
     def test_reads_stated_deadlines(self):
@@ -39,16 +49,33 @@ class DeadlineTests(unittest.TestCase):
 
 class BlueCardTests(unittest.TestCase):
     def test_verdicts_and_stale_warning(self):
-        today = date(BLUE_CARD["year"], 6, 1)
-        self.assertEqual(blue_card(BLUE_CARD["regular"], today)["verdict"], "yes")
-        self.assertEqual(blue_card(BLUE_CARD["shortage"] + 1, today)["verdict"], "shortage")
+        today = date(2026, 6, 1)
+        self.assertEqual(blue_card(50700, today)["verdict"], "yes")
+        self.assertEqual(blue_card(45935, today)["verdict"], "shortage")
         self.assertEqual(blue_card(40000, today)["verdict"], "no")
         self.assertFalse(blue_card(60000, today)["stale"])
-        self.assertTrue(blue_card(60000, date(BLUE_CARD["year"] + 1, 1, 2))["stale"])
+        self.assertTrue(blue_card(60000, date(max(PENSION_CEILING) + 1, 1, 2))["stale"])
 
-    def test_source_is_dated_and_official(self):
-        self.assertTrue(BLUE_CARD["url"].startswith("https://www.arbeitsagentur.de/"))
-        date.fromisoformat(BLUE_CARD["checked"])
+    def test_lines_follow_the_pension_ceiling(self):
+        self.assertEqual(blue_card_lines(2026), {"year": 2026, "regular": 50700, "shortage": 45934.2})
+        self.assertEqual(blue_card_lines(2025), {"year": 2025, "regular": 48300, "shortage": 43759.8})
+        self.assertEqual(blue_card_lines(2099)["year"], max(PENSION_CEILING))  # no newer ceiling: last known one
+        self.assertEqual(blue_card(45934, date(2026, 6, 1))["verdict"], "no")  # 20 cents short of 45,934.20
+
+    def test_next_year_is_not_used_before_1_january(self):
+        # 2027 is in the table already; a job checked in December must still get the 2026 lines
+        dec, jan = blue_card_info(date(2026, 12, 31)), blue_card_info(date(2027, 1, 1))
+        self.assertEqual((dec["year"], dec["regular"], dec["final"]), (2026, 50700, True))
+        self.assertEqual((jan["year"], jan["regular"], jan["shortage"]), (2027, 53100, 48108.6))
+        self.assertFalse(jan["final"])  # cabinet figure, Bundesrat approval pending
+        self.assertEqual(blue_card(52000, date(2026, 12, 31))["verdict"], "yes")
+        self.assertEqual(blue_card(52000, date(2027, 1, 1))["verdict"], "shortage")
+
+    def test_every_year_shown_has_an_official_dated_source(self):
+        for y in range(2026, max(PENSION_CEILING) + 1):
+            info = blue_card_info(date(y, 6, 1))
+            self.assertRegex(info["url"], r"^https://www\.(bundesanzeiger|bundesregierung)\.de/")
+            date.fromisoformat(info["checked"])
 
 
 class CompareTests(unittest.TestCase):

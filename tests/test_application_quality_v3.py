@@ -119,7 +119,7 @@ class PageBalanceTests(unittest.TestCase):
             count = sum("Python-Datenpipelines, Thema" in p.text or
                         "Python-Werkzeug zur Datenaufbereitung, Teil" in p.text
                         for p in doc.paragraphs)
-            page_count = (3 if count > max_bullets else 2) if "_CV_" in source.name else 1
+            page_count = (3 if count > max_bullets else 2) if source.stem.endswith("_CV") else 1
             for _ in range(page_count):
                 writer.add_blank_page(width=595.3, height=841.9)
             dest = source.with_suffix(".pdf")
@@ -139,12 +139,12 @@ class PageBalanceTests(unittest.TestCase):
                 res = tailor_job(job, p, Path(tmp), llm=None, make_pdf=True,
                                  cv_style="lebenslauf", cv_focus="balanced")
             cv = Document(next(Path(f) for f in res["files"] if f.endswith(".docx")
-                               and "_CV_" in f))
+                               and Path(f).stem.endswith("_CV")))
             paragraphs = [p.text for p in cv.paragraphs]
             count = sum("Python-Datenpipelines, Thema" in x or
                         "Python-Werkzeug zur Datenaufbereitung, Teil" in x
                         for x in paragraphs)
-            report = (Path(res["folder"]) / "report.md").read_text()
+            report = (Path(res["folder"]) / "edit" / "report.md").read_text()
             self.assertEqual(res["quality"]["stats"]["cv_pages"], 2)
             self.assertIn("## Dokumentenprüfung", report)
             return count, report

@@ -304,7 +304,7 @@ def make_docs(settings, db, job_id: str, llm=None) -> dict:
     try:
         res = tailor_job(job, settings.profile, (Path(settings.home) / t["output_dir"]).resolve(), llm or LLM(settings),
                          t.get("make_pdf", True), t.get("letter_language", "auto"), my_german_level(settings),
-                         t.get("cv_style", "classic"), t.get("cv_focus", "balanced"),
+                         t.get("cv_style", "modern"), t.get("cv_focus", "balanced"),
                          t.get("cv_education", "compact"))
     except (ProfileQualityError, DocumentQualityError) as exc:
         raise AddError(str(exc)) from exc

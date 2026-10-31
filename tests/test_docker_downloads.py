@@ -93,6 +93,35 @@ class BrowserDocumentsTest(unittest.TestCase):
         self.assertEqual(self._error("/api/download-doc/" + self.id + "/secrets"), 404)
         self.assertEqual(self._error("/api/download-folder/nonexistent"), 404)
 
+    def test_new_document_layout_downloads_pdf_and_editable_word_files(self):
+        self.cv.unlink()
+        self.letter.unlink()
+        edit = self.folder / "edit"
+        edit.mkdir()
+        files = {"Test_CV.pdf": b"new pdf", "edit/Test_CV.docx": b"editable cv",
+                 "edit/Test_Cover_Letter.docx": b"editable letter"}
+        for name, content in files.items():
+            (self.folder / name).write_bytes(content)
+        self.assertEqual(self._get(f"/api/download-doc/{self.id}/cv")[2], b"new pdf")
+        self.assertEqual(self._get(f"/api/download-doc/{self.id}/letter")[2], b"editable letter")
+        with zipfile.ZipFile(io.BytesIO(self._get(f"/api/download-folder/{self.id}")[2])) as archive:
+            self.assertEqual(set(archive.namelist()), set(files))
+            for name, content in files.items():
+                self.assertEqual(archive.read(name), content)
+
+    def test_edit_directory_symlink_cannot_expose_private_documents(self):
+        other = self.home / "private"
+        other.mkdir()
+        (other / "Secret_CV.docx").write_bytes(b"secret")
+        try:
+            (self.folder / "edit").symlink_to(other, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable")
+        self.cv.unlink()
+        self.assertEqual(self._error(f"/api/download-doc/{self.id}/cv"), 404)
+        with zipfile.ZipFile(io.BytesIO(self._get(f"/api/download-folder/{self.id}")[2])) as archive:
+            self.assertEqual(archive.namelist(), [self.letter.name])
+
     def test_outside_output_and_symlinks_are_not_downloaded(self):
         other = self.home / "private"
         other.mkdir()

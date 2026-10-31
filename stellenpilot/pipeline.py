@@ -5,6 +5,7 @@ import http.client
 import logging
 import re
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 import urllib.parse
 import urllib.request
@@ -39,14 +40,26 @@ def collect(settings, db: DB) -> tuple[list[dict], list[str]]:
     excl = settings["search"].get("exclude_title_words", [])
     new, problems = [], []
     country = settings["search"]["country"].lower()
+    todo = []
     for name in enabled:
         covered = getattr(sources.REGISTRY[name], "COUNTRIES", None)
         if covered and country not in covered:
             problems.append(f"{name} skipped: it does not cover country '{country}'")
-            continue
-        db.stage("collect", f"Searching {sources.REGISTRY[name].LABEL}")
+        else:
+            todo.append(name)
+    # Every source is a different site, so all are asked at once and the run takes as long as the slowest.
+    # Results are then handled one by one in ORDER, so the same copy of a duplicate wins as before
+    # and only this thread writes to the database.
+    futures = {}
+    if todo:
+        db.stage("collect", f"Searching {len(todo)} sources")
+        with ThreadPoolExecutor(len(todo)) as pool:
+            futures = {n: pool.submit(sources.REGISTRY[n].fetch, settings) for n in todo}
+            for done, _ in enumerate(as_completed(futures.values()), 1):
+                db.stage("collect", f"Searching {len(todo)} sources, {done} done")
+    for name in todo:
         try:
-            found = sources.REGISTRY[name].fetch(settings)
+            found = futures[name].result()
         except Exception as e:  # one broken source must not stop the run
             problems.append(f"{name}: {friendly_error(e)}")
             log.warning("source %s failed: %s", name, e)
@@ -154,6 +167,41 @@ def make_prep(job: dict, profile: dict, llm) -> str:
     return "\n".join(out)[:4000]
 
 
+MOCK_SYSTEM = """You are a kind but honest interview coach. The candidate just answered one interview question out loud, in writing.
+Rate the answer: 0 = needs work, 1 = good, 2 = strong. Judge only this answer, not their whole CV.
+Give at most two short "worked" points (what was good) and at most two short "improve" points (what to add or change).
+Base everything on the answer and the candidate's real background. Never invent experience they do not have.
+Keep each point under 18 words. Do not use hyphens or dashes as punctuation inside sentences.
+Return JSON: {"rating": 0, "worked": ["..."], "improve": ["..."]}"""
+
+STRONGER_SYSTEM = """Rewrite the candidate's interview answer as a stronger version they could say out loud.
+Use ONLY their real experience and the job ad. Keep it to 3 or 4 sentences, first person, concrete, no buzzwords.
+Do not claim any tool or result that is not in their background. Do not use hyphens or dashes as punctuation inside sentences.
+Return JSON: {"stronger": "..."}"""
+
+
+def _mock_user(job: dict, profile: dict, question: str, answer: str, llm) -> str:
+    return (f"CANDIDATE\n{profile_text(profile)}\n\nJOB\n{job['title']} at {job['company']}\n"
+            f"{job_ad(job.get('description', ''), llm.max_chars)}\n\nQUESTION\n{question}\n\nTHEIR ANSWER\n{answer}")
+
+
+def grade_answer(job: dict, profile: dict, question: str, answer: str, llm) -> dict:
+    """Rate one spoken answer. Needs AI; the caller checks llm.enabled first and self-rates without it."""
+    r = llm.complete_json(MOCK_SYSTEM, _mock_user(job, profile, question, answer, llm), max_tokens=400)
+    rating = r.get("rating")
+    rating = int(rating) if isinstance(rating, (int, float)) else 1
+    clean = lambda xs: [str(x).strip() for x in (xs or []) if str(x).strip()][:2]
+    return {"rating": max(0, min(2, rating)), "worked": clean(r.get("worked")), "improve": clean(r.get("improve"))}
+
+
+def stronger_answer(job: dict, profile: dict, question: str, answer: str, llm) -> str:
+    """A model answer, built only from the candidate's real background. Truth guarded like the CV."""
+    text = str(llm.complete_json(STRONGER_SYSTEM, _mock_user(job, profile, question, answer, llm), max_tokens=500).get("stronger") or "").strip()
+    # Drop any sentence that claims something the candidate's experience does not support.
+    kept = [s for s in re.split(r"(?<=[.!?])\s+", text) if s and not unsupported_claims(s, profile, job)]
+    return " ".join(kept)[:900]
+
+
 def run(settings, *, tailor: bool = True) -> dict:
     db = DB(settings.db_path)
     try:
@@ -215,7 +263,7 @@ def _run(settings, db: DB, tailor: bool) -> dict:
             db.stage("tailor", f"Tailoring CV {i} of {len(todo)}: {job['company']}")
             try:
                 res = tailor_job(job, profile, out_root, llm, t.get("make_pdf", True), t.get("letter_language", "auto"), my_de,
-                                 t.get("cv_style", "classic"), t.get("cv_focus", "balanced"),
+                                 t.get("cv_style", "modern"), t.get("cv_focus", "balanced"),
                                  t.get("cv_education", "compact"))
             except Exception as e:
                 problems.append(f"tailoring {job['id']}: {e}")

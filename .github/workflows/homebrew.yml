@@ -1,0 +1,95 @@
+# Keeps the Homebrew formula in srvskr1/homebrew-stellenpilot on the newest PyPI release, so
+# `brew upgrade stellenpilot` picks it up. Homebrew only takes packages that have been on PyPI for
+# a day (a supply chain safety delay), so this checks once a day instead of right after a release:
+# a new version reaches Homebrew one to two days after it is published. Does nothing when the tap
+# is already up to date or the newest version is still under a day old. Also runs from the Actions
+# tab ("Run workflow").
+#
+# One time setup: a fine grained GitHub token with "Contents: Read and write" on
+# srvskr1/homebrew-stellenpilot only, saved here as the repository secret HOMEBREW_TAP_TOKEN.
+name: homebrew
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    runs-on: macos-latest
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_FROM_API: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: newest version on PyPI that is old enough for Homebrew
+        id: v
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import datetime, json, urllib.request
+          # The newest release that has been on PyPI for over a day. Taking only the very newest
+          # would stall the tap whenever releases come out faster than once a day.
+          d = json.load(urllib.request.urlopen("https://pypi.org/pypi/stellenpilot/json"))
+          now = datetime.datetime.now(datetime.timezone.utc)
+          def key(v):
+              try: return tuple(int(x) for x in v.split("."))
+              except ValueError: return ()
+          best = None
+          for v, files in sorted(d["releases"].items(), key=lambda kv: key(kv[0]), reverse=True):
+              sd = [u for u in files if u["packagetype"] == "sdist" and not u.get("yanked")]
+              if not key(v) or not sd:
+                  continue
+              age = now - datetime.datetime.fromisoformat(sd[0]["upload_time_iso_8601"].replace("Z", "+00:00"))
+              if age > datetime.timedelta(hours=25):
+                  best = (v, sd[0]); break
+          if best:
+              print(f"version={best[0]}"); print(f"url={best[1]['url']}"); print(f"sha={best[1]['digests']['sha256']}"); print("ready=true")
+          else:
+              print(f"version={d['info']['version']}"); print("ready=false")
+          PY
+          cat "$GITHUB_OUTPUT"
+      - name: too new for Homebrew
+        if: steps.v.outputs.ready != 'true'
+        run: echo "No release is over a day old on PyPI yet. Homebrew will take one tomorrow."
+      - name: open the tap
+        if: steps.v.outputs.ready == 'true'
+        id: tap
+        env:
+          TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          brew tap srvskr1/stellenpilot
+          brew trust --formula srvskr1/stellenpilot/stellenpilot  # Homebrew 7+ refuses untrusted taps
+          dir=$(brew --repository srvskr1/stellenpilot)
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          git -C "$dir" remote set-url origin "https://x-access-token:${TOKEN}@github.com/srvskr1/homebrew-stellenpilot.git"
+          if grep -q "stellenpilot-${{ steps.v.outputs.version }}.tar.gz" "$dir/Formula/stellenpilot.rb"; then
+            echo "same=true" >> "$GITHUB_OUTPUT"; echo "The tap already has ${{ steps.v.outputs.version }}."
+          fi
+      - name: point the formula at the new version
+        if: steps.v.outputs.ready == 'true' && steps.tap.outputs.same != 'true'
+        run: |
+          f="${{ steps.tap.outputs.dir }}/Formula/stellenpilot.rb"
+          URL="${{ steps.v.outputs.url }}" SHA="${{ steps.v.outputs.sha }}" ruby -i -pe '
+            if !$done_url && $_ =~ /^  url "/ then $_ = %Q(  url "#{ENV["URL"]}"\n); $done_url = true
+            elsif !$done_sha && $_ =~ /^  sha256 "/ then $_ = %Q(  sha256 "#{ENV["SHA"]}"\n); $done_sha = true end' "$f"
+          brew update-python-resources stellenpilot
+          git -C "${{ steps.tap.outputs.dir }}" diff
+      - name: install and test it like a user would
+        if: steps.v.outputs.ready == 'true' && steps.tap.outputs.same != 'true'
+        run: |
+          brew style srvskr1/stellenpilot
+          brew install --build-from-source srvskr1/stellenpilot/stellenpilot
+          brew test srvskr1/stellenpilot/stellenpilot
+          stellenpilot --home "$RUNNER_TEMP/ws" init
+          test -f "$RUNNER_TEMP/ws/config.toml"
+      - name: publish to the tap
+        if: steps.v.outputs.ready == 'true' && steps.tap.outputs.same != 'true'
+        run: |
+          cd "${{ steps.tap.outputs.dir }}"
+          git config user.name "Sourav Sarker"
+          git config user.email "srvskr1@users.noreply.github.com"
+          git commit -am "stellenpilot ${{ steps.v.outputs.version }}"
+          git push origin HEAD:main

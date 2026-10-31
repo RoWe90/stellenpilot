@@ -173,7 +173,7 @@ class RenderingTests(unittest.TestCase):
             res = tailor_job(job, p, Path(tmp), make_pdf=False,
                              cv_style="lebenslauf", cv_focus="concise",
                              cv_education="essential")
-            report = (Path(res["folder"]) / "report.md").read_text()
+            report = (Path(res["folder"]) / "edit" / "report.md").read_text()
             self.assertIn("## CV-Auswahl", report)
             self.assertIn("## Dokumentenprüfung", report)
             self.assertIn("Status: PASS", report)
